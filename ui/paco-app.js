@@ -106,21 +106,30 @@
     if (s === 'done' && ws.result) {
       const result = ws.result;
 
-      // Apply navigate result to panels
-      const newPanels = S.applyNavigateResult(appState.panels, result);
-      if (newPanels !== appState.panels) {
-        appState = { ...appState, panels: newPanels };
-        const side = result.panel;
-        selSets[side].clear();
+      // Tasks returning both panels embed { left, right } sub-payloads;
+      // single-panel tasks return a direct payload. Apply whichever are present.
+      const payloads = [];
+      if (result.panel)                       payloads.push(result);
+      if (result.left  && result.left.panel)  payloads.push(result.left);
+      if (result.right && result.right.panel) payloads.push(result.right);
 
-        // Config comes back with every navigate result
-        if (result.config) {
-          appState = { ...appState, config: result.config };
-          dom.html.setAttribute('data-theme', result.config.theme || 'dark');
+      for (const payload of payloads) {
+        const newPanels = S.applyNavigateResult(appState.panels, payload);
+        if (newPanels !== appState.panels) {
+          appState = { ...appState, panels: newPanels };
+          selSets[payload.panel].clear();
+          if (payload.config) {
+            appState = { ...appState, config: payload.config };
+            dom.html.setAttribute('data-theme', payload.config.theme || 'dark');
+          }
+          renderPanel(payload.panel);
         }
+      }
+      if (payloads.length > 0) renderFkeys();
 
-        renderPanel(side);
-        renderFkeys();
+      // Surface per-item errors from copy / move / delete
+      if (result.errors && result.errors.length > 0) {
+        showError('Some items failed', result.errors.join('\n'));
       }
 
       // ── Boot sequencing ────────────────────────────────────────────────
@@ -422,8 +431,10 @@
       [{ label: 'Cancel', value: null }, { label: 'Create', cls: 'primary' }],
       'New Folder'
     );
+    // null = Cancel button; 'Cancel' = button label fallback; empty string = blank input
     if (!name || name === 'Cancel') return;
-    showError('Coming soon', 'mkdir task not yet implemented');
+    adapter.assign('worker/tasks/mkdir.js', { panel: side, name })
+      .catch(err => showError('New Folder failed', err.message));
   }
 
   async function cmdCopy() {
@@ -432,13 +443,20 @@
     const other = side === 'left' ? 'right' : 'left';
     const sel   = selArray(side);
     if (sel.length === 0) return;
+    const dst = appState.panels[other].path;
+    if (!dst) return showError('Copy failed', 'Target panel has no open directory');
     const confirmed = await showOverlay(
       'Copy',
-      S.opConfirmMessage('copy', sel.length, appState.panels[other].path),
+      S.opConfirmMessage('copy', sel.length, dst),
       [{ label: 'Cancel', value: false }, { label: 'Copy', cls: 'primary', value: true }]
     );
     if (!confirmed) return;
-    showError('Coming soon', 'copy task not yet implemented');
+    adapter.assign('worker/tasks/copy.js', {
+      sources:  sel,
+      dst,
+      panel:    side,
+      dstPanel: other,
+    }).catch(err => showError('Copy failed', err.message));
   }
 
   async function cmdMove() {
@@ -447,13 +465,20 @@
     const other = side === 'left' ? 'right' : 'left';
     const sel   = selArray(side);
     if (sel.length === 0) return;
+    const dst = appState.panels[other].path;
+    if (!dst) return showError('Move failed', 'Target panel has no open directory');
     const confirmed = await showOverlay(
       'Move',
-      S.opConfirmMessage('move', sel.length, appState.panels[other].path),
+      S.opConfirmMessage('move', sel.length, dst),
       [{ label: 'Cancel', value: false }, { label: 'Move', cls: 'primary', value: true }]
     );
     if (!confirmed) return;
-    showError('Coming soon', 'move task not yet implemented');
+    adapter.assign('worker/tasks/move.js', {
+      sources:  sel,
+      dst,
+      panel:    side,
+      dstPanel: other,
+    }).catch(err => showError('Move failed', err.message));
   }
 
   async function cmdDelete() {
@@ -467,7 +492,10 @@
       [{ label: 'Cancel', value: false }, { label: 'Delete', cls: 'danger', value: true }]
     );
     if (!confirmed) return;
-    showError('Coming soon', 'delete task not yet implemented');
+    adapter.assign('worker/tasks/delete.js', {
+      sources: sel,
+      panel:   side,
+    }).catch(err => showError('Delete failed', err.message));
   }
 
   // ─── Event wiring ─────────────────────────────────────────────────────────────
