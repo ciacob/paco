@@ -1,0 +1,59 @@
+{
+  "name": "task-primer",
+  "version": "0.1.0",
+  "description": "A resident work-delegation application: worker sub-process controlled via CLI flags, REST API, and browser UI.",
+  "main": "main.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start":      "node main.js",
+    "start:ui":   "node main.js --ui",
+    "start:dev":  "node main.js --ui --worker-crash=restart --autoexit",
+    "test":       "node --test test/*.test.js",
+    "test:watch": "node --test --watch test/*.test.js"
+  },
+  "taskPrimer": {
+    "appName": "Task Primer",
+    "webPort":  6321,
+    "webHost":  "127.0.0.1",
+
+    "window": {
+      "width":  null,
+      "height": null,
+      "x":      null,
+      "y":      null
+    },
+
+    "security": {
+      "devTools":       true,
+      "allowRefresh":    true
+    },
+    "browser": {
+      "product":  "chrome",
+      "buildId":  "stable",
+      "cacheDir": ".browsers",
+      "debugPort": 8120,
+      "notes": [
+        "buildId 'stable' resolves to the latest Chrome for Testing stable release",
+        "at download time via the @puppeteer/browsers channel resolution API.",
+        "The resolved build is cached in .browsers/ and reused on subsequent runs.",
+        "To pin a specific version, replace 'stable' with an exact version string",
+        "such as '124.0.6367.207', then delete .browsers/ to force a re-download.",
+        "Find verified cross-platform versions at:",
+        "https://googlechromelabs.github.io/chrome-for-testing/"
+      ]
+    }
+  },
+  "keywords": ["worker", "subprocess", "ipc", "fastify", "task-queue"],
+  "license": "ISC",
+  "dependencies": {
+    "@fastify/static":    "^9.0.0",
+    "@fastify/websocket": "^11.2.0",
+    "@puppeteer/browsers": "^2.0.0",
+    "fastify":            "^5.8.4",
+    "fastify-plugin":     "^5.1.0",
+    "ws":                 "^8.20.0",
+    "yargs":              "^18.0.0"
+  }
+}

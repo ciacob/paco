@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Partial Commander</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --font-ui:   'Segoe UI', 'Ubuntu', system-ui, sans-serif;
+      --font-mono: 'Consolas', 'Menlo', 'Monaco', monospace;
+      --radius:    5px;
+      --bar-h:     32px;
+      --tab-h:     28px;
+      --fkey-h:    30px;
+      --transition: 120ms ease;
+    }
+
+    [data-theme="dark"] {
+      --bg:          #1a1b1e;
+      --bg2:         #25262b;
+      --bg3:         #2c2e33;
+      --bg4:         #373a40;
+      --border:      #373a40;
+      --border2:     #4a4d54;
+      --text:        #c9cdd4;
+      --text2:       #8b909a;
+      --text3:       #5c6070;
+      --accent:      #d4a853;
+      --accent2:     #b8904a;
+      --sel-bg:      #2a3a5c;
+      --sel-text:    #7eb8f7;
+      --active-panel:#1c2333;
+      --active-tab:  #1a1b1e;
+      --inactive-tab:#25262b;
+      --path-bg:     #1f2024;
+      --entry-hover: #2e3035;
+      --dir-color:   #7eb8f7;
+      --link-color:  #79c9c9;
+      --err-color:   #e06c75;
+      --ok-color:    #98c379;
+      --top-bg:      #111214;
+      --fkey-bg:     #25262b;
+      --fkey-label:  #8b909a;
+      --fkey-text:   #c9cdd4;
+      --busy-bg:     #2a2400;
+      --busy-text:   #d4a853;
+    }
+
+    [data-theme="light"] {
+      --bg:          #f0ede8;
+      --bg2:         #e5e1db;
+      --bg3:         #d8d4ce;
+      --bg4:         #c8c4bd;
+      --border:      #c0bbb4;
+      --border2:     #a8a39c;
+      --text:        #2c2a27;
+      --text2:       #6b665f;
+      --text3:       #9b958e;
+      --accent:      #8a5c1e;
+      --accent2:     #6e4817;
+      --sel-bg:      #cce0f5;
+      --sel-text:    #1a4a7a;
+      --active-panel:#deeefb;
+      --active-tab:  #f0ede8;
+      --inactive-tab:#e5e1db;
+      --path-bg:     #e8e4de;
+      --entry-hover: #e2ddd7;
+      --dir-color:   #2563aa;
+      --link-color:  #1a7a7a;
+      --err-color:   #c0392b;
+      --ok-color:    #277a47;
+      --top-bg:      #d8d4ce;
+      --fkey-bg:     #e5e1db;
+      --fkey-label:  #8a5c1e;
+      --fkey-text:   #2c2a27;
+      --busy-bg:     #fef9e7;
+      --busy-text:   #8a5c1e;
+    }
+
+    ::-webkit-scrollbar { width: 8px; height: 8px; background: var(--bg2); }
+    ::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 4px; }
+
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: var(--font-ui);
+      font-size: 13px;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* Top bar */
+    #top-bar {
+      flex: 0 0 auto;
+      height: var(--bar-h);
+      background: var(--top-bg);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 0 6px;
+      user-select: none;
+    }
+    .top-brand {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-right: 8px;
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 12px;
+      letter-spacing: .04em;
+      flex-shrink: 0;
+    }
+    .top-btn {
+      height: 24px;
+      padding: 0 8px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text2);
+      font-size: 11px;
+      font-family: var(--font-ui);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background var(--transition), color var(--transition);
+    }
+    .top-btn:hover { background: var(--bg4); color: var(--text); }
+    #top-spacer { flex: 1; }
+    .conn-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--text3);
+      flex-shrink: 0;
+      transition: background .4s;
+      margin-left: 6px;
+    }
+    .conn-dot.ok   { background: var(--ok-color); }
+    .conn-dot.busy { background: var(--accent); }
+    .conn-dot.err  { background: var(--err-color); }
+
+    /* Busy bar */
+    #busy-bar {
+      flex: 0 0 0;
+      height: 0;
+      overflow: hidden;
+      background: var(--busy-bg);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      transition: height var(--transition);
+      font-size: 12px;
+      color: var(--busy-text);
+    }
+    #busy-bar.visible { height: 24px; }
+    #busy-progress-track {
+      flex: 1;
+      height: 4px;
+      background: var(--bg4);
+      border-radius: 2px;
+      overflow: hidden;
+      max-width: 300px;
+    }
+    #busy-progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      width: 0%;
+      transition: width .15s ease;
+    }
+    #busy-abort {
+      height: 18px; padding: 0 6px;
+      font-size: 11px;
+      background: transparent;
+      border: 1px solid var(--border2);
+      border-radius: 3px;
+      color: var(--text2);
+      cursor: pointer;
+      font-family: var(--font-ui);
+    }
+    #busy-abort:hover { border-color: var(--err-color); color: var(--err-color); }
+
+    /* Panels area */
+    #panels-area {
+      flex: 1 1 0;
+      display: flex;
+      overflow: hidden;
+      border-bottom: 1px solid var(--border);
+    }
+    #panel-divider {
+      width: 3px;
+      background: var(--border);
+      cursor: col-resize;
+      flex-shrink: 0;
+      transition: background var(--transition);
+    }
+    #panel-divider:hover { background: var(--accent2); }
+
+    /* Single panel */
+    .panel {
+      flex: 1 1 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .panel.active { background: var(--active-panel); }
+
+    /* Tabs */
+    .tabs-bar {
+      flex: 0 0 var(--tab-h);
+      display: flex;
+      align-items: flex-end;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding-left: 2px;
+      gap: 1px;
+      user-select: none;
+    }
+    .tabs-bar::-webkit-scrollbar { height: 0; }
+    .tab {
+      height: calc(var(--tab-h) - 1px);
+      padding: 0 8px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--text2);
+      background: var(--inactive-tab);
+      border: 1px solid var(--border);
+      border-bottom: none;
+      border-radius: 4px 4px 0 0;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background var(--transition);
+    }
+    .tab:hover { background: var(--bg3); color: var(--text); }
+    .tab.active { background: var(--active-tab); color: var(--text); }
+    .tab-close {
+      opacity: 0; font-size: 10px;
+      width: 14px; height: 14px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 3px;
+    }
+    .tab:hover .tab-close { opacity: 1; }
+    .tab-close:hover { background: var(--bg4); color: var(--err-color); }
+    .tab-add {
+      height: calc(var(--tab-h) - 1px);
+      width: 24px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; color: var(--text3);
+      cursor: pointer;
+      border-radius: 4px 4px 0 0;
+    }
+    .tab-add:hover { color: var(--accent); background: var(--bg3); }
+
+    /* Nav bar */
+    .nav-bar {
+      flex: 0 0 28px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      padding: 0 5px;
+      background: var(--path-bg);
+      border-bottom: 1px solid var(--border);
+      user-select: none;
+    }
+    .nav-btn {
+      width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: 3px;
+      color: var(--text2);
+      font-size: 13px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background var(--transition);
+    }
+    .nav-btn:hover:not(:disabled) { background: var(--bg4); color: var(--text); }
+    .nav-btn:disabled { opacity: .3; cursor: default; }
+    .volume-select {
+      height: 20px; padding: 0 4px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text2);
+      font-size: 11px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+    }
+    .volume-select:focus { outline: none; border-color: var(--accent2); }
+    .breadcrumb {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text2);
+    }
+    .crumb {
+      padding: 2px 4px;
+      border-radius: 3px;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: background var(--transition);
+    }
+    .crumb:hover { background: var(--bg4); color: var(--accent); }
+    .crumb-sep { color: var(--text3); padding: 0 1px; flex-shrink: 0; }
+
+    /* File list */
+    .file-list-header {
+      flex: 0 0 22px;
+      display: flex;
+      align-items: center;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      padding: 0 6px;
+      font-size: 11px;
+      color: var(--text3);
+      user-select: none;
+    }
+    .col-name  { flex: 1; min-width: 0; }
+    .col-size  { width: 72px; text-align: right; padding-right: 8px; flex-shrink: 0; }
+    .col-mtime { width: 120px; flex-shrink: 0; }
+    .col-header { cursor: pointer; padding: 2px 4px; border-radius: 3px; }
+    .col-header:hover { background: var(--bg3); color: var(--text); }
+    .col-header.sorted { color: var(--accent); }
+
+    .file-list {
+      flex: 1 1 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      outline: none;
+    }
+    .entry {
+      display: flex;
+      align-items: center;
+      padding: 0 6px;
+      height: 20px;
+      cursor: default;
+      user-select: none;
+    }
+    .entry:hover { background: var(--entry-hover); }
+    .entry.selected { background: var(--sel-bg); }
+    .entry-icon {
+      width: 16px; flex-shrink: 0;
+      font-size: 11px; text-align: center;
+      margin-right: 4px; color: var(--text3);
+    }
+    .entry-name {
+      flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 12px; color: var(--text);
+    }
+    .entry.selected .entry-name { color: var(--sel-text); }
+    .entry-name.is-dir  { color: var(--dir-color); font-weight: 500; }
+    .entry-name.is-link { color: var(--link-color); font-style: italic; }
+    .entry-size {
+      width: 72px; text-align: right; padding-right: 8px;
+      font-family: var(--font-mono); font-size: 11px;
+      color: var(--text3); flex-shrink: 0;
+    }
+    .entry-mtime {
+      width: 120px;
+      font-family: var(--font-mono); font-size: 11px;
+      color: var(--text3); flex-shrink: 0;
+    }
+    .entry.selected .entry-size,
+    .entry.selected .entry-mtime { color: var(--sel-text); opacity: .75; }
+
+    /* Panel status */
+    .panel-status {
+      flex: 0 0 18px;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      background: var(--bg2);
+      border-top: 1px solid var(--border);
+      font-size: 10px;
+      color: var(--text3);
+      gap: 12px;
+      user-select: none;
+    }
+
+    /* F-key bar */
+    #fkey-bar {
+      flex: 0 0 var(--fkey-h);
+      display: flex;
+      background: var(--fkey-bg);
+      border-top: 1px solid var(--border);
+      user-select: none;
+    }
+    .fkey {
+      flex: 1;
+      height: var(--fkey-h);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      background: transparent;
+      border: none;
+      border-right: 1px solid var(--border);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      transition: background var(--transition);
+    }
+    .fkey:last-child { border-right: none; }
+    .fkey:hover:not(:disabled) { background: var(--bg4); }
+    .fkey:disabled { opacity: .35; cursor: default; }
+    .fkey-label { font-size: 10px; color: var(--fkey-label); font-weight: 600; }
+    .fkey-name  { font-size: 12px; color: var(--fkey-text); }
+
+    /* Overlay */
+    #overlay-bg {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.5);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    #overlay-bg.visible { display: flex; }
+    #overlay-box {
+      background: var(--bg2);
+      border: 1px solid var(--border2);
+      border-radius: 8px;
+      padding: 20px 24px;
+      min-width: 280px; max-width: 440px;
+    }
+    #overlay-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+    #overlay-msg   { font-size: 12px; color: var(--text2); margin-bottom: 16px; line-height: 1.5; }
+    #overlay-input {
+      width: 100%;
+      height: 26px;
+      padding: 0 8px;
+      background: var(--bg3);
+      border: 1px solid var(--border2);
+      border-radius: 4px;
+      color: var(--text);
+      font-size: 12px;
+      font-family: var(--font-mono);
+      margin-bottom: 14px;
+      display: none;
+    }
+    #overlay-input:focus { outline: none; border-color: var(--accent2); }
+    .overlay-btns { display: flex; gap: 8px; justify-content: flex-end; }
+    .overlay-btn {
+      height: 26px; padding: 0 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--bg3); color: var(--text);
+      font-size: 12px; font-family: var(--font-ui); cursor: pointer;
+    }
+    .overlay-btn:hover { background: var(--bg4); }
+    .overlay-btn.danger { border-color: var(--err-color); color: var(--err-color); }
+    .overlay-btn.danger:hover { background: var(--err-color); color: #fff; }
+    .overlay-btn.primary { border-color: var(--accent2); color: var(--accent); }
+    .overlay-btn.primary:hover { background: var(--accent2); color: #fff; }
+    .list-empty { padding: 24px 12px; text-align: center; color: var(--text3); font-size: 12px; }
+  </style>
+</head>
+<body>
+
+  <div id="top-bar">
+    <div class="top-brand">
+      <svg width="18" height="18" viewBox="0 0 100 100" fill="currentColor">
+        <ellipse cx="50" cy="65" rx="28" ry="22"/>
+        <circle cx="50" cy="36" r="17"/>
+        <ellipse cx="33" cy="22" rx="7" ry="11" transform="rotate(-18 33 22)"/>
+        <ellipse cx="67" cy="22" rx="7" ry="11" transform="rotate(18 67 22)"/>
+        <circle cx="43" cy="35" r="3" fill="var(--top-bg)"/>
+        <circle cx="57" cy="35" r="3" fill="var(--top-bg)"/>
+      </svg>
+      PACO
+    </div>
+    <button class="top-btn" id="btn-refresh">⟳ Refresh</button>
+    <button class="top-btn" id="btn-config">⚙ Settings</button>
+    <div id="top-spacer"></div>
+    <div class="conn-dot" id="conn-dot"></div>
+  </div>
+
+  <div id="busy-bar">
+    <span id="busy-msg">Working…</span>
+    <div id="busy-progress-track"><div id="busy-progress-fill"></div></div>
+    <span id="busy-pct">0%</span>
+    <button id="busy-abort">✕ Abort</button>
+  </div>
+
+  <div id="panels-area">
+    <div class="panel active" id="panel-left" data-side="left">
+      <div class="tabs-bar" id="tabs-left"></div>
+      <div class="nav-bar">
+        <button class="nav-btn" id="back-left"  title="Back">◀</button>
+        <button class="nav-btn" id="fwd-left"   title="Forward">▶</button>
+        <button class="nav-btn" id="up-left"    title="Up">↑</button>
+        <select class="volume-select" id="vol-left"></select>
+        <div class="breadcrumb" id="bread-left"></div>
+      </div>
+      <div class="file-list-header" id="header-left">
+        <div class="col-name col-header" data-sort="name" data-panel="left">Name</div>
+        <div class="col-size col-header" data-sort="size" data-panel="left">Size</div>
+        <div class="col-mtime col-header" data-sort="mtime" data-panel="left">Modified</div>
+      </div>
+      <div class="file-list" id="list-left" tabindex="0"></div>
+      <div class="panel-status">
+        <span id="status-left-count">—</span>
+        <span id="status-left-sel"></span>
+      </div>
+    </div>
+
+    <div id="panel-divider"></div>
+
+    <div class="panel" id="panel-right" data-side="right">
+      <div class="tabs-bar" id="tabs-right"></div>
+      <div class="nav-bar">
+        <button class="nav-btn" id="back-right" title="Back">◀</button>
+        <button class="nav-btn" id="fwd-right"  title="Forward">▶</button>
+        <button class="nav-btn" id="up-right"   title="Up">↑</button>
+        <select class="volume-select" id="vol-right"></select>
+        <div class="breadcrumb" id="bread-right"></div>
+      </div>
+      <div class="file-list-header" id="header-right">
+        <div class="col-name col-header" data-sort="name" data-panel="right">Name</div>
+        <div class="col-size col-header" data-sort="size" data-panel="right">Size</div>
+        <div class="col-mtime col-header" data-sort="mtime" data-panel="right">Modified</div>
+      </div>
+      <div class="file-list" id="list-right" tabindex="0"></div>
+      <div class="panel-status">
+        <span id="status-right-count">—</span>
+        <span id="status-right-sel"></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="fkey-bar">
+    <button class="fkey" id="fk-view"  disabled><span class="fkey-label">F3</span><span class="fkey-name">View</span></button>
+    <button class="fkey" id="fk-edit"  disabled><span class="fkey-label">F4</span><span class="fkey-name">Edit</span></button>
+    <button class="fkey" id="fk-copy"  disabled><span class="fkey-label">F5</span><span class="fkey-name">Copy</span></button>
+    <button class="fkey" id="fk-move"  disabled><span class="fkey-label">F6</span><span class="fkey-name">Move</span></button>
+    <button class="fkey" id="fk-mkdir"           ><span class="fkey-label">F7</span><span class="fkey-name">New Folder</span></button>
+    <button class="fkey" id="fk-delete" disabled><span class="fkey-label">F8</span><span class="fkey-name">Delete</span></button>
+  </div>
+
+  <div id="overlay-bg">
+    <div id="overlay-box">
+      <div id="overlay-title"></div>
+      <div id="overlay-msg"></div>
+      <input id="overlay-input" type="text" />
+      <div class="overlay-btns" id="overlay-btns"></div>
+    </div>
+  </div>
+
+  <script src="../paco/ui-state.js"></script>
+  <script src="adapter.js"></script>
+  <script src="paco-app.js"></script>
+</body>
+</html>
