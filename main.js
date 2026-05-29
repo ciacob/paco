@@ -113,7 +113,7 @@ function spawnWorker() {
 
       case EVT.READY:
         log('worker', 'ready');
-        updateState({ state: STATE.IDLE, message: 'Worker ready' });
+        updateState({ state: STATE.IDLE, message: 'Worker ready', result: null });
         break;
 
       case EVT.STATUS_UPDATE:
@@ -121,6 +121,7 @@ function spawnWorker() {
         updateState({
           state:   envelope.payload?.state   ?? workerState.state,
           message: envelope.payload?.message ?? workerState.message,
+          result:  null,
         });
         break;
 
@@ -128,18 +129,19 @@ function spawnWorker() {
         updateState({
           percent: envelope.payload?.percent ?? workerState.percent,
           message: envelope.payload?.message ?? workerState.message,
+          result:  null,
         });
         break;
 
       case EVT.TASK_DONE:
         log('worker', 'task done', envelope.payload);
-        updateState({ state: STATE.DONE, message: 'Task completed', percent: 100 });
+        updateState({ state: STATE.DONE, message: 'Task completed', percent: 100, result: envelope.payload?.result ?? null });
         break;
 
       case EVT.TASK_ERROR:
         log('worker', 'ERROR:', envelope.payload?.message);
         if (envelope.payload?.stack) log('worker', envelope.payload.stack);
-        updateState({ state: STATE.ERROR, message: envelope.payload?.message });
+        updateState({ state: STATE.ERROR, message: envelope.payload?.message, result: null });
         break;
 
       default:

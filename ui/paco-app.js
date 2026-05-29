@@ -72,12 +72,15 @@
   // ─── Navigate ─────────────────────────────────────────────────────────────────
 
   function navigate(side, targetPath, opts = {}) {
-    if (appState.busy) return;
+    if (appState.busy) { console.warn('[PACO] navigate blocked — busy'); return; }
+    const taskPath = targetPath || appState.panels[side].path || '';
+    console.log('[PACO] navigate', side, taskPath);
     adapter.assign('worker/tasks/navigate.js', {
       panel:       side,
-      path:        targetPath || appState.panels[side].path || '',
+      path:        taskPath,
       pushHistory: opts.pushHistory !== false,
-    }).catch(err => showError('Navigation failed', err.message));
+    }).then(r => console.log('[PACO] assign accepted', r))
+      .catch(err => { console.error('[PACO] assign failed', err); showError('Navigation failed', err.message); });
   }
 
   // ─── WS state handler ─────────────────────────────────────────────────────────
@@ -86,6 +89,7 @@
     if (!ws) return;
 
     const s = ws.state || 'idle';
+    console.log('[PACO ws]', s, ws.percent != null ? ws.percent+'%' : '', ws.message || '', ws.result ? '(has result)' : '');
     dom.connDot.className = 'conn-dot ok';
 
     // ── Busy bar ────────────────────────────────────────────────────────────
@@ -147,8 +151,14 @@
     if (s === 'error') {
       appState = { ...appState, busy: false };
       dom.busyBar.classList.remove('visible');
-      showError('Task error', ws.message || 'Unknown error');
-      adapter.reset().catch(() => {});
+      // State-machine violations (e.g. reset-from-idle) are not user-visible errors
+      // and must NOT trigger another reset — that would cause an infinite loop.
+      const errMsg = ws.message || '';
+      const isStateMachineViolation = /Cannot \w+ from state/.test(errMsg);
+      if (!isStateMachineViolation) {
+        showError('Task error', errMsg || 'Unknown error');
+        adapter.reset().catch(() => {});
+      }
     }
 
     if (s === 'aborted') {
@@ -159,6 +169,7 @@
 
     // ── Boot trigger on first idle ───────────────────────────────────────
     const bootAction = S.nextBootAction(appState.bootPhase, ws);
+    console.log('[PACO boot]', appState.bootPhase, s, '->', bootAction.action);
     if (bootAction.action === 'navigate-left') {
       appState = { ...appState, bootPhase: S.advanceBootPhase(appState.bootPhase, bootAction.action) };
       navigate('left', '');

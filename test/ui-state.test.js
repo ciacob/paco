@@ -72,6 +72,22 @@ describe('nextBootAction', () => {
     assert.equal(r.action, 'none');
   });
 
+  test('idle + done(left) → navigate-right (page reload recovery)', () => {
+    const r = S.nextBootAction('idle', {
+      state: 'done',
+      result: { panel: 'left', entries: [] },
+    });
+    assert.equal(r.action, 'navigate-right');
+  });
+
+  test('idle + done(right) → none (page reload recovery, right panel already done)', () => {
+    const r = S.nextBootAction('idle', {
+      state: 'done',
+      result: { panel: 'right', entries: [] },
+    });
+    assert.equal(r.action, 'none');
+  });
+
   test('booting-right + done(right) → none (caller sets ready)', () => {
     const r = S.nextBootAction('booting-right', {
       state: 'done',

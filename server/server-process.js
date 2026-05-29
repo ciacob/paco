@@ -47,6 +47,14 @@ async function boot() {
     decorateReply: false,
   });
 
+  // Serve paco/ under /paco/ so the browser can load shared modules
+  // e.g. <script src="/paco/ui-state.js">
+  await fastify.register(require('@fastify/static'), {
+    root:        path.resolve(__dirname, '..', 'paco'),
+    prefix:      '/paco/',
+    decorateReply: false,
+  });
+
   // ── Application plugins ────────────────────────────────────────────────────
 
   // WebSocket status feed at /ws/status
@@ -77,6 +85,9 @@ boot().catch((err) => {
   console.error('[server] Boot error:', err);
   process.exit(1);
 });
+
+// Expose current state for the WS feed to send on new connections
+module.exports.getCurrentState = () => latestWorkerState;
 
 // IPC: receive state pushes from main, fan out to WebSocket clients
 process.on('message', (envelope) => {

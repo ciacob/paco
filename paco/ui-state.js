@@ -79,13 +79,16 @@ function nextBootAction(bootPhase, ws) {
     return { action: 'navigate-left' };
   }
 
-  // Step 2: left panel done → kick off right panel
-  if (bootPhase === 'booting-left' && s === 'done' && ws.result && ws.result.panel === 'left') {
+  // Step 2: left panel done → kick off right panel.
+  // Also handles page reload landing on a stale 'done' result (bootPhase still 'idle').
+  if ((bootPhase === 'booting-left' || bootPhase === 'idle') &&
+      s === 'done' && ws.result && ws.result.panel === 'left') {
     return { action: 'navigate-right' };
   }
 
   // Step 3: right panel done → boot complete
-  if (bootPhase === 'booting-right' && s === 'done' && ws.result && ws.result.panel === 'right') {
+  if ((bootPhase === 'booting-right' || bootPhase === 'idle') &&
+      s === 'done' && ws.result && ws.result.panel === 'right') {
     return { action: 'none' };  // caller sets bootPhase = 'ready'
   }
 
@@ -460,8 +463,14 @@ const uiState = {
   opConfirmMessage,
 };
 
+// Always expose as a browser global when running in a browser context.
+// The typeof-window check is reliable; typeof-module is not (some environments
+// define module without it being a proper CommonJS context).
+if (typeof window !== 'undefined') {
+  window.uiState = uiState;
+}
+
+// CommonJS export for Node.js (tests, tasks).
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = uiState;
-} else {
-  window.uiState = uiState;
 }

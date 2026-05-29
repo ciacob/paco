@@ -37,13 +37,16 @@ async function statusFeedPlugin(fastify) {
   fastify.get('/ws/status', { websocket: true }, (socket) => {
     clients.add(socket);
 
+    // Send the current state immediately on connect so a freshly loaded
+    // (or reloaded) page doesn't miss results that arrived before it connected.
+    const currentState = require('../server-process').getCurrentState();
+    if (currentState) {
+      socket.send(JSON.stringify(currentState));
+    }
+
     socket.on('close', () => clients.delete(socket));
 
     socket.on('error', () => clients.delete(socket));
-
-    // Optionally: send current state snapshot on connect (server-process
-    // may call broadcast right after a new connection is known — or the
-    // client can call GET /worker/status via REST immediately after connecting).
   });
 }
 
