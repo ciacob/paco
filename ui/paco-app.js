@@ -58,8 +58,6 @@
     return {
       panel:   $(`panel-${side}`),
       tabs:    $(`tabs-${side}`),
-      back:    $(`back-${side}`),
-      fwd:     $(`fwd-${side}`),
       up:      $(`up-${side}`),
       vol:     $(`vol-${side}`),
       bread:   $(`bread-${side}`),
@@ -190,7 +188,6 @@
     renderBreadcrumb(side, p);
     renderVolumes(side, p);
     renderList(side, p);
-    renderNavButtons(side, p);
     renderStatus(side, p);
   }
 
@@ -369,12 +366,9 @@
   }
 
   function renderNavButtons(side, p) {
-    const d = pd(side);
-    d.back.disabled = appState.busy || !S.canGoBack(p);
-    d.fwd.disabled  = appState.busy || !S.canGoFwd(p);
     // Disable up when at a filesystem root (parentPath returns same path)
     const atRoot = !!p.path && S.parentPath(p.path) === p.path;
-    d.up.disabled  = appState.busy || atRoot;
+    pd(side).up.disabled = appState.busy || atRoot;
   }
 
   function renderStatus(side, p) {
@@ -556,14 +550,6 @@
 
   ['left', 'right'].forEach(side => {
     pd(side).panel.addEventListener('mousedown', () => setActivePanel(side));
-    pd(side).back.addEventListener('click',  () => {
-      const target = S.backPath(appState.panels[side]);
-      if (target) navigate(side, target, { pushHistory: false });
-    });
-    pd(side).fwd.addEventListener('click', () => {
-      const target = S.fwdPath(appState.panels[side]);
-      if (target) navigate(side, target, { pushHistory: false });
-    });
     pd(side).up.addEventListener('click', () => navigate(side, S.parentPath(appState.panels[side].path)));
     pd(side).vol.addEventListener('change', e => navigate(side, e.target.value));
 
@@ -586,8 +572,6 @@
     else if (e.key === 'F8' || e.key === 'Delete')   { e.preventDefault(); cmdDelete(); }
     else if (e.key === 'Tab')                        { e.preventDefault(); setActivePanel(other); pd(other).list.focus(); }
     else if (e.key === 'Backspace' && !e.target.matches('input')) { e.preventDefault(); navigate(side, S.parentPath(appState.panels[side].path)); }
-    else if (e.key === 'ArrowLeft'  && e.altKey)     { e.preventDefault(); pd(side).back.click(); }
-    else if (e.key === 'ArrowRight' && e.altKey)     { e.preventDefault(); pd(side).fwd.click(); }
     else if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
       if (!e.target.matches('input, select')) {
         e.preventDefault();

@@ -25,7 +25,6 @@ function makePanelState(defaultPath = '') {
     entries:    [],
     selection:  [],          // array of paths (Set in UI, serialised here for purity)
     history:    [],
-    historyIdx: -1,
     tabs: [{ id: 'tab-default', path: defaultPath, label: null }],
     activeTab:  'tab-default',
     volumes:    [],
@@ -158,7 +157,6 @@ function applyNavigateResult(panels, result) {
     entries:    result.entries    || [],
     selection:  [],
     history:    result.history    || prev.history,
-    historyIdx: result.history    ? result.history.length - 1 : prev.historyIdx,
     tabs:       updatedTabs,
     activeTab,
     volumes:    result.volumes    || prev.volumes,
@@ -201,45 +199,6 @@ function parentPath(dirPath) {
 
   const parent = parts.slice(0, -1).join('/');
   return isWin ? parent.replace(/\//g, '\\') : '/' + parent;
-}
-
-/**
- * Determine whether the back button should be enabled.
- * @param {object} panel — panel state slice
- * @returns {boolean}
- */
-function canGoBack(panel) {
-  return panel.historyIdx > 0;
-}
-
-/**
- * Determine whether the forward button should be enabled.
- * @param {object} panel
- * @returns {boolean}
- */
-function canGoFwd(panel) {
-  return panel.historyIdx < panel.history.length - 1;
-}
-
-/**
- * Get the path to navigate back to, or null if not possible.
- * Does NOT mutate state.
- * @param {object} panel
- * @returns {string|null}
- */
-function backPath(panel) {
-  if (!canGoBack(panel)) return null;
-  return panel.history[panel.historyIdx - 1];
-}
-
-/**
- * Get the path to navigate forward to, or null if not possible.
- * @param {object} panel
- * @returns {string|null}
- */
-function fwdPath(panel) {
-  if (!canGoFwd(panel)) return null;
-  return panel.history[panel.historyIdx + 1];
 }
 
 // ─── Selection helpers ────────────────────────────────────────────────────────
@@ -445,10 +404,6 @@ const uiState = {
   busyStateFrom,
   applyNavigateResult,
   parentPath,
-  canGoBack,
-  canGoFwd,
-  backPath,
-  fwdPath,
   toggleSelection,
   selectAllPaths,
   addTab,

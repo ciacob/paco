@@ -179,18 +179,15 @@ describe('applyNavigateResult', () => {
   test('updates the correct panel', () => {
     const panels = makePanels();
     const result = {
-      panel:      'left',
-      path:       '/new/path',
-      entries:    [{ name: 'foo', path: '/new/path/foo', type: 'file', size: 100, mtime: 0 }],
-      history:    ['/old/left', '/new/path'],
-      breadcrumbs: [],
-      panelState: { tabs: [{ id: 'tab-default', path: '/new/path', label: null }], activeTab: 'tab-default' },
-      volumes:    ['/'],
+      panel:    'left',
+      path:     '/new/path',
+      entries:  [{ name: 'foo', path: '/new/path/foo', type: 'file', size: 100, mtime: 0 }],
+      history:  ['/old/left', '/new/path'],
+      volumes:  ['/'],
     };
     const next = S.applyNavigateResult(panels, result);
     assert.equal(next.left.path, '/new/path');
     assert.equal(next.left.entries.length, 1);
-    assert.equal(next.left.historyIdx, 1);
     assert.deepEqual(next.left.selection, []);
     // right panel unchanged
     assert.equal(next.right.path, '/old/right');
@@ -312,45 +309,6 @@ describe('parentPath', () => {
   });
 });
 
-// ─── canGoBack / canGoFwd / backPath / fwdPath ────────────────────────────────
-
-describe('history navigation predicates', () => {
-  function panel(history, idx) {
-    return { history, historyIdx: idx };
-  }
-
-  test('canGoBack false at start', () => {
-    assert.equal(S.canGoBack(panel(['/a'], 0)), false);
-  });
-
-  test('canGoBack true after navigation', () => {
-    assert.equal(S.canGoBack(panel(['/a', '/b'], 1)), true);
-  });
-
-  test('canGoFwd false at end', () => {
-    assert.equal(S.canGoFwd(panel(['/a', '/b'], 1)), false);
-  });
-
-  test('canGoFwd true when history has forward entries', () => {
-    assert.equal(S.canGoFwd(panel(['/a', '/b'], 0)), true);
-  });
-
-  test('backPath returns correct path', () => {
-    assert.equal(S.backPath(panel(['/a', '/b', '/c'], 2)), '/b');
-  });
-
-  test('backPath returns null at start', () => {
-    assert.equal(S.backPath(panel(['/a'], 0)), null);
-  });
-
-  test('fwdPath returns correct path', () => {
-    assert.equal(S.fwdPath(panel(['/a', '/b', '/c'], 0)), '/b');
-  });
-
-  test('fwdPath returns null at end', () => {
-    assert.equal(S.fwdPath(panel(['/a', '/b'], 1)), null);
-  });
-});
 
 // ─── toggleSelection ─────────────────────────────────────────────────────────
 
