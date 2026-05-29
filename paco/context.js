@@ -36,20 +36,25 @@ const PATHS = {
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
+// Bump this when state schema changes in a breaking way.
+// bootstrap() resets tabs when it finds a version mismatch.
+const STATE_VERSION = 2;
+
 const DEFAULT_STATE = {
+  version:     STATE_VERSION,
   activePanel: 'left',
   panels: {
     left: {
       path:      os.homedir(),
       selection: [],
-      tabs: [{ id: 'default', path: os.homedir(), label: null }],
-      activeTab: 'default',
+      tabs: [{ id: 'tab-default', path: os.homedir(), label: null }],
+      activeTab: 'tab-default',
     },
     right: {
       path:      os.homedir(),
       selection: [],
-      tabs: [{ id: 'default', path: os.homedir(), label: null }],
-      activeTab: 'default',
+      tabs: [{ id: 'tab-default', path: os.homedir(), label: null }],
+      activeTab: 'tab-default',
     },
   },
 };
@@ -93,6 +98,28 @@ function bootstrap() {
   _ensureFile(PATHS.history,    DEFAULT_HISTORY);
   _ensureFile(PATHS.operations, DEFAULT_OPERATIONS);
   _ensureFile(PATHS.config,     DEFAULT_CONFIG);
+
+  // Migrate stale state: reset tabs if state version is missing or outdated.
+  // This clears accumulated ghost tabs from pre-versioned sessions.
+  _migrateState();
+}
+
+function _migrateState() {
+  const state = _read(PATHS.state, null);
+  if (!state) return;
+  if (state.version === STATE_VERSION) return;
+
+  // Reset each panel's tabs to a single default tab, preserving the path.
+  for (const side of ['left', 'right']) {
+    const panel = state.panels && state.panels[side];
+    if (!panel) continue;
+    const path = panel.path || os.homedir();
+    panel.tabs      = [{ id: 'tab-default', path, label: null }];
+    panel.activeTab = 'tab-default';
+    panel.selection = [];
+  }
+  state.version = STATE_VERSION;
+  _write(PATHS.state, state);
 }
 
 function _ensureFile(filePath, defaultValue) {

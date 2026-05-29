@@ -317,7 +317,14 @@
       transition: background var(--transition);
     }
     .crumb:hover { background: var(--bg4); color: var(--accent); }
-    .crumb-sep { color: var(--text3); padding: 0 1px; flex-shrink: 0; }
+    .crumb-current {
+      color: var(--text);
+      cursor: default;
+      opacity: 0.6;
+    }
+    .crumb-current:hover { background: transparent; color: var(--text); }
+    .crumb-sep { color: var(--text3); flex-shrink: 0; }
+    .crumb-gap { width: 4px; flex-shrink: 0; }
 
     /* File list */
     .file-list-header {

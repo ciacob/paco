@@ -73,11 +73,17 @@
 
   function navigate(side, targetPath, opts = {}) {
     if (appState.busy) { console.warn('[PACO] navigate blocked — busy'); return; }
-    const taskPath = targetPath || appState.panels[side].path || '';
-    console.log('[PACO] navigate', side, taskPath);
+    const p        = appState.panels[side];
+    const taskPath = targetPath || p.path || '';
+    const tabId    = opts.tabId || p.activeTab;
+    console.log('[PACO] navigate', side, taskPath, 'tab:', tabId);
     adapter.assign('worker/tasks/navigate.js', {
       panel:       side,
       path:        taskPath,
+      tabId,
+      // Send current tab structure so the task writes authoritative state to disk
+      tabs:        p.tabs,
+      activeTab:   tabId,
       pushHistory: opts.pushHistory !== false,
     }).then(r => console.log('[PACO] assign accepted', r))
       .catch(err => { console.error('[PACO] assign failed', err); showError('Navigation failed', err.message); });
@@ -225,19 +231,36 @@
   function renderBreadcrumb(side, p) {
     const el = pd(side).bread;
     el.innerHTML = '';
-    const sep = (p.path || '').includes('\\') ? '\\' : '/';
-    (p.breadcrumbs || buildCrumbsFromPath(p.path)).forEach((c, i, arr) => {
+    const isWin  = (p.path || '').includes('\\');
+    const sep    = isWin ? '\\' : '/';
+    const crumbs = p.breadcrumbs || buildCrumbsFromPath(p.path);
+
+    crumbs.forEach((c, i, arr) => {
+      const isLast  = i === arr.length - 1;
+      const isRoot  = c.label === '/' || c.label === sep;
+
       const span = document.createElement('span');
-      span.className = 'crumb';
-      span.textContent = c.label;
+      span.className = isLast ? 'crumb crumb-current' : 'crumb';
       span.title = c.path;
-      span.addEventListener('click', () => navigate(side, c.path));
-      el.appendChild(span);
-      if (i < arr.length - 1) {
-        const s = document.createElement('span');
-        s.className = 'crumb-sep';
-        s.textContent = sep;
-        el.appendChild(s);
+
+      if (isRoot) {
+        // Root crumb: show just "/" — separator role is baked into the label
+        span.textContent = sep;
+        if (!isLast) span.addEventListener('click', () => navigate(side, c.path));
+        el.appendChild(span);
+        // No explicit separator after root — the next label follows directly
+      } else {
+        // Normal segment: "foldername /"  (separator trails the label)
+        span.textContent = isLast ? c.label : c.label + ' ' + sep;
+        if (!isLast) span.addEventListener('click', () => navigate(side, c.path));
+        el.appendChild(span);
+      }
+
+      // Add a small gap between segments for readability
+      if (!isLast && !isRoot) {
+        const gap = document.createElement('span');
+        gap.className = 'crumb-gap';
+        el.appendChild(gap);
       }
     });
   }
@@ -258,8 +281,15 @@
 
   function renderVolumes(side, p) {
     const sel = pd(side).vol;
-    const vols = p.volumes || [];
+    let vols = p.volumes || [];
     if (vols.length === 0) return;
+    // On macOS, '/' is the root of the system volume and is also reachable
+    // via /Volumes/Macintosh HD (or similar). Showing bare '/' alongside a
+    // named volume is redundant and confusing — filter it out when there are
+    // other volumes available.
+    if (vols.length > 1) {
+      vols = vols.filter(v => v !== '/');
+    }
     sel.innerHTML = '';
     vols.forEach(v => {
       const opt = document.createElement('option');
@@ -267,6 +297,7 @@
       opt.textContent = v;
       sel.appendChild(opt);
     });
+    // Select the volume that best matches the current path
     const match = vols.find(v => (p.path || '').startsWith(v));
     sel.value = match || vols[0];
   }
@@ -312,12 +343,19 @@
 
       row.addEventListener('click', e => {
         setActivePanel(side);
-        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        // Plain click selects/deselects this item exclusively (like TC).
+        // Ctrl/Cmd click toggles without clearing others.
+        // Shift click is reserved for range selection (future).
+        if (e.ctrlKey || e.metaKey) {
           const newSel = S.toggleSelection(selArray(side), entry.path);
           selSets[side] = new Set(newSel);
-          renderList(side, appState.panels[side]);
-          renderFkeys();
+        } else if (!e.shiftKey) {
+          // Plain click: toggle this item, clear all others
+          const wasSelected = selSets[side].has(entry.path);
+          selSets[side] = wasSelected ? new Set() : new Set([entry.path]);
         }
+        renderList(side, appState.panels[side]);
+        renderFkeys();
       });
 
       row.addEventListener('dblclick', () => {
@@ -334,7 +372,9 @@
     const d = pd(side);
     d.back.disabled = appState.busy || !S.canGoBack(p);
     d.fwd.disabled  = appState.busy || !S.canGoFwd(p);
-    d.up.disabled   = appState.busy;
+    // Disable up when at a filesystem root (parentPath returns same path)
+    const atRoot = !!p.path && S.parentPath(p.path) === p.path;
+    d.up.disabled  = appState.busy || atRoot;
   }
 
   function renderStatus(side, p) {
@@ -366,25 +406,28 @@
   // ─── Tab event handlers ───────────────────────────────────────────────────────
 
   function onAddTab(side) {
-    const id     = 'tab-' + Date.now();
-    const newP   = S.addTab(appState.panels[side], id);
-    appState     = { ...appState, panels: { ...appState.panels, [side]: newP } };
+    const id   = 'tab-' + Date.now();
+    const newP = S.addTab(appState.panels[side], id);
+    appState   = { ...appState, panels: { ...appState.panels, [side]: newP } };
     renderTabs(side, newP);
-    navigate(side, newP.path);
+    // navigate() will pick up activeTab (= id) automatically now
+    navigate(side, newP.path, { tabId: id, pushHistory: false });
   }
 
   function onCloseTab(side, tabId) {
     const { panel: newP, navigateTo } = S.closeTab(appState.panels[side], tabId);
     appState = { ...appState, panels: { ...appState.panels, [side]: newP } };
     renderTabs(side, newP);
-    if (navigateTo) navigate(side, navigateTo);
+    // navigate() passes activeTab, which causes the task to write the updated
+    // tab list (without the closed tab) to disk.
+    navigate(side, navigateTo || newP.path, { pushHistory: false });
   }
 
   function onSwitchTab(side, tabId) {
     const { panel: newP, navigateTo } = S.switchTab(appState.panels[side], tabId);
     appState = { ...appState, panels: { ...appState.panels, [side]: newP } };
     renderTabs(side, newP);
-    if (navigateTo) navigate(side, navigateTo);
+    if (navigateTo) navigate(side, navigateTo, { tabId, pushHistory: false });
   }
 
   // ─── Overlay ──────────────────────────────────────────────────────────────────

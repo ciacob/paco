@@ -80,6 +80,49 @@ describe('bootstrap', () => {
     ctx.bootstrap(); // second call
     assert.equal(ctx.readConfig().theme, 'light');
   });
+
+  test('migrates stale state: resets tabs when version is missing', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    // Manually write stale state without version and with multiple ghost tabs
+    const stale = {
+      activePanel: 'left',
+      panels: {
+        left: {
+          path: '/some/path',
+          selection: [],
+          tabs: [
+            { id: 'tab-1', path: '/a', label: null },
+            { id: 'tab-2', path: '/b', label: null },
+            { id: 'tab-3', path: '/c', label: null },
+          ],
+          activeTab: 'tab-2',
+        },
+        right: {
+          path: '/other',
+          selection: [],
+          tabs: [
+            { id: 'tab-4', path: '/d', label: null },
+            { id: 'tab-5', path: '/e', label: null },
+          ],
+          activeTab: 'tab-4',
+        },
+      },
+      // no version field — simulates pre-migration state
+    };
+    const fs2 = require('fs');
+    fs2.writeFileSync(ctx.PATHS.state, JSON.stringify(stale), 'utf8');
+    // Bootstrap should migrate
+    ctx.bootstrap();
+    const migrated = ctx.readState();
+    assert.equal(migrated.panels.left.tabs.length, 1, 'left tabs reset to 1');
+    assert.equal(migrated.panels.right.tabs.length, 1, 'right tabs reset to 1');
+    assert.equal(migrated.panels.left.tabs[0].id, 'tab-default');
+    assert.equal(migrated.panels.right.tabs[0].id, 'tab-default');
+    // Path preserved
+    assert.equal(migrated.panels.left.path, '/some/path');
+    assert.equal(migrated.panels.right.path, '/other');
+  });
 });
 
 // ─── config ───────────────────────────────────────────────────────────────────

@@ -52,11 +52,15 @@ module.exports = {
 
     // ── 4. Update context on disk ─────────────────────────────────────────────
     ctx.progress(80, 'Updating state…');
-    const panelState = state.panels[panel];
-    const activeTab  = tabId || panelState.activeTab;
-    const tabs       = panelState.tabs.map(t =>
-      t.id === activeTab ? { ...t, path: resolved } : t
-    );
+
+    // The UI sends its authoritative tab list. Use it if provided; fall back
+    // to whatever is on disk only if the UI sent nothing (e.g. old clients).
+    const panelState   = state.panels[panel];
+    const activeTab    = ctx.config.activeTab || tabId || panelState.activeTab;
+    let   tabs         = ctx.config.tabs || panelState.tabs;
+
+    // Update the navigated tab's path to the resolved destination
+    tabs = tabs.map(t => t.id === activeTab ? { ...t, path: resolved } : t);
 
     context.updatePanel(panel, { path: resolved, selection: [], tabs, activeTab });
     if (pushHistory) context.pushHistory(panel, resolved);

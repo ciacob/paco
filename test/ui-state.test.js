@@ -230,6 +230,49 @@ describe('applyNavigateResult', () => {
     const next = S.applyNavigateResult(panels, result);
     assert.deepEqual(next.right.volumes, ['/', '/mnt']);
   });
+
+  test('new tab survives navigate result (UI is authoritative for tabs)', () => {
+    const panels = makePanels();
+    // UI has two tabs in memory
+    panels.left.tabs = [
+      { id: 'tab-default', path: '/old/left', label: null },
+      { id: 'tab-new',     path: '/old/left', label: null },
+    ];
+    panels.left.activeTab = 'tab-new';
+    const result = {
+      panel: 'left',
+      path: '/new/path',
+      entries: [],
+      history: ['/new/path'],
+      // result no longer carries panelState.tabs — UI owns tab structure
+    };
+    const next = S.applyNavigateResult(panels, result);
+    // Both in-memory tabs must survive untouched
+    assert.equal(next.left.tabs.length, 2);
+    assert.ok(next.left.tabs.find(t => t.id === 'tab-default'));
+    assert.ok(next.left.tabs.find(t => t.id === 'tab-new'));
+    // Active tab path updated to navigated path
+    const active = next.left.tabs.find(t => t.id === 'tab-new');
+    assert.equal(active.path, '/new/path');
+  });
+
+  test('closed tab does not reappear after navigate result', () => {
+    const panels = makePanels();
+    // UI already closed tab-2 — only tab-default remains in memory
+    panels.left.tabs = [{ id: 'tab-default', path: '/a', label: null }];
+    panels.left.activeTab = 'tab-default';
+    const result = {
+      panel: 'left',
+      path: '/a',
+      entries: [],
+      history: ['/a'],
+      // result carries no tab info — UI is authoritative
+    };
+    const next = S.applyNavigateResult(panels, result);
+    // tab-2 must NOT reappear — UI's tab list is the source of truth
+    assert.equal(next.left.tabs.length, 1);
+    assert.ok(next.left.tabs.find(t => t.id === 'tab-default'));
+  });
 });
 
 // ─── parentPath ───────────────────────────────────────────────────────────────

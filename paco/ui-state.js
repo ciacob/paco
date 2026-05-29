@@ -143,12 +143,12 @@ function applyNavigateResult(panels, result) {
   const side = result.panel;
   const prev = panels[side];
 
-  // Sync tabs from persisted state (task owns tab state on disk)
-  const tabs      = (result.panelState && result.panelState.tabs)      || prev.tabs;
-  const activeTab = (result.panelState && result.panelState.activeTab) || prev.activeTab;
-
-  // Update the active tab's path
-  const updatedTabs = tabs.map(t =>
+  // Tab structure (which tabs exist, which is active) is owned entirely by
+  // the UI and written to disk explicitly on tab operations. Navigate results
+  // must NEVER overwrite the in-memory tab list — they only update the active
+  // tab's path to reflect where we navigated.
+  const activeTab   = prev.activeTab;
+  const updatedTabs = prev.tabs.map(t =>
     t.id === activeTab ? { ...t, path: result.path } : t
   );
 
