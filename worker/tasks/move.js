@@ -28,23 +28,18 @@ const nodePath = require('path');
 const provider = require('../../paco/fs-provider');
 const helpers  = require('../../paco/task-helpers');
 
-// Reuse the same collision-resolution logic as copy.js
+// Prefix-based collision resolution: (1) name, (2) name, etc.
 async function resolveDestination(srcPath, dstDir) {
   const base = nodePath.basename(srcPath);
-  const ext  = nodePath.extname(base);
-  const stem = base.slice(0, base.length - ext.length);
-
-  let candidate = nodePath.join(dstDir, base);
-  if (!(await provider.stat(candidate))) return candidate;
-
-  let n = 0;
-  while (true) {
-    const suffix = n === 0 ? ' (copy)' : ` (copy ${n + 1})`;
-    candidate = nodePath.join(dstDir, stem + suffix + ext);
-    if (!(await provider.stat(candidate))) return candidate;
-    n++;
-    if (n > 99) throw new Error(`Too many copies of "${base}" in destination`);
+  let existing;
+  try { existing = new Set(await require('fs/promises').readdir(dstDir)); }
+  catch (_) { existing = new Set(); }
+  if (!existing.has(base)) return nodePath.join(dstDir, base);
+  for (let n = 1; n <= 999; n++) {
+    const candidate = `(${n}) ${base}`;
+    if (!existing.has(candidate)) return nodePath.join(dstDir, candidate);
   }
+  return nodePath.join(dstDir, `(${Date.now()}) ${base}`);
 }
 
 async function totalSize(itemPath) {

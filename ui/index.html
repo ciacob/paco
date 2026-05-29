@@ -476,6 +476,79 @@
     .overlay-btn.primary { border-color: var(--accent2); color: var(--accent); }
     .overlay-btn.primary:hover { background: var(--accent2); color: #fff; }
     .list-empty { padding: 24px 12px; text-align: center; color: var(--text3); font-size: 12px; }
+
+    /* ── Copy dialog ────────────────────────────────────────────────────────── */
+    #copy-dialog-bg {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.55); z-index: 110;
+      align-items: center; justify-content: center;
+    }
+    #copy-dialog-bg.visible { display: flex; }
+    #copy-dialog {
+      background: var(--bg2); border: 1px solid var(--border2);
+      border-radius: 10px; width: 480px; max-width: 96vw;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    #copy-dialog-header {
+      padding: 14px 18px 10px; font-size: 13px; font-weight: 600;
+      color: var(--text); border-bottom: 1px solid var(--border); line-height: 1.4;
+    }
+    #copy-dialog-body { padding: 14px 18px; overflow-y: auto; font-size: 12px; color: var(--text2); }
+    .copy-conflict-row { display: flex; gap: 12px; }
+    .copy-conflict-group {
+      flex: 1; background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 6px; padding: 10px 12px;
+    }
+    .copy-conflict-group legend {
+      font-size: 11px; color: var(--text3); font-weight: 600;
+      text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px;
+    }
+    .copy-radio-row {
+      display: flex; align-items: center; gap: 6px;
+      margin-bottom: 4px; cursor: pointer; padding: 2px 0;
+    }
+    .copy-radio-row:last-child { margin-bottom: 0; }
+    .copy-radio-row input[type=radio] { accent-color: var(--accent); flex-shrink: 0; }
+    .copy-radio-row span { cursor: pointer; color: var(--text2); font-size: 12px; }
+    #copy-progress-wrap, #copy-report-wrap { display: none; }
+    #copy-progress-track {
+      height: 6px; background: var(--bg4); border-radius: 3px;
+      overflow: hidden; margin: 8px 0 6px;
+    }
+    #copy-progress-fill {
+      height: 100%; background: var(--accent); border-radius: 3px;
+      width: 0%; transition: width .15s ease;
+    }
+    #copy-progress-stats {
+      font-size: 11px; color: var(--text3); font-family: var(--font-mono);
+      display: flex; gap: 14px; flex-wrap: wrap;
+    }
+    #copy-report-text {
+      white-space: pre-wrap; font-size: 12px; color: var(--text); line-height: 1.6;
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 6px; padding: 10px 12px;
+    }
+    #copy-dialog-footer {
+      padding: 10px 18px 14px; border-top: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .copy-check-row {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text2); cursor: pointer; flex: 1;
+    }
+    .copy-check-row input[type=checkbox] { accent-color: var(--accent); }
+    #copy-keep-row { display: none; }
+    .copy-btn {
+      height: 28px; padding: 0 16px; border-radius: var(--radius);
+      border: 1px solid var(--border); background: var(--bg3); color: var(--text);
+      font-size: 12px; font-family: var(--font-ui); cursor: pointer; flex-shrink: 0;
+      transition: background var(--transition);
+    }
+    .copy-btn:hover { background: var(--bg4); }
+    .copy-btn.primary { border-color: var(--accent2); color: var(--accent); }
+    .copy-btn.primary:hover { background: var(--accent2); color: #fff; }
+    .copy-btn.danger  { border-color: var(--err-color); color: var(--err-color); }
+    .copy-btn.danger:hover { background: var(--err-color); color: #fff; }
   </style>
 </head>
 <body>
@@ -562,6 +635,57 @@
       <div id="overlay-msg"></div>
       <input id="overlay-input" type="text" />
       <div class="overlay-btns" id="overlay-btns"></div>
+    </div>
+  </div>
+
+  <!-- Copy dialog (three-phase: configure → progress → report) -->
+  <div id="copy-dialog-bg">
+    <div id="copy-dialog">
+      <div id="copy-dialog-header">Copy</div>
+      <div id="copy-dialog-body">
+
+        <!-- Phase 1: Configure -->
+        <div id="copy-configure-wrap">
+          <div class="copy-conflict-row">
+            <fieldset class="copy-conflict-group">
+              <legend>If files clash</legend>
+              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="abort" />      <span>Abort copy</span></label>
+              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="replaceOlder"/><span>Replace older</span></label>
+              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="replaceAll"/>  <span>Replace all</span></label>
+              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="prefix"/>      <span>Keep both (add prefix)</span></label>
+            </fieldset>
+            <fieldset class="copy-conflict-group">
+              <legend>If folders clash</legend>
+              <label class="copy-radio-row"><input type="radio" name="conflictFolders" value="abort"/>  <span>Abort copy</span></label>
+              <label class="copy-radio-row"><input type="radio" name="conflictFolders" value="merge"/>  <span>Merge</span></label>
+              <label class="copy-radio-row"><input type="radio" name="conflictFolders" value="replace"/><span>Replace</span></label>
+              <label class="copy-radio-row"><input type="radio" name="conflictFolders" value="prefix"/> <span>Keep both (add prefix)</span></label>
+            </fieldset>
+          </div>
+        </div>
+
+        <!-- Phase 2: Progress -->
+        <div id="copy-progress-wrap">
+          <div id="copy-progress-track"><div id="copy-progress-fill"></div></div>
+          <div id="copy-progress-stats"></div>
+        </div>
+
+        <!-- Phase 3: Report -->
+        <div id="copy-report-wrap">
+          <div id="copy-report-text"></div>
+        </div>
+
+      </div>
+      <div id="copy-dialog-footer">
+        <label class="copy-check-row" id="copy-report-row">
+          <input type="checkbox" id="copy-show-report" /> Show report when done
+        </label>
+        <label class="copy-check-row" id="copy-keep-row">
+          <input type="checkbox" id="copy-keep-on-abort" /> Keep copied files
+        </label>
+        <button class="copy-btn" id="copy-cancel-btn">Cancel</button>
+        <button class="copy-btn primary" id="copy-ok-btn">Copy</button>
+      </div>
     </div>
   </div>
 

@@ -71,9 +71,9 @@ class TaskShell {
       config: taskConfig || {},
       isCancelled: () => this._cancelled,
 
-      progress: (percent, message) => {
+      progress: (percent, message, extra) => {
         if (this._state !== STATE.RUNNING && this._state !== STATE.PAUSED) return;
-        this._emit(msg(EVT.TASK_PROGRESS, { percent, message: message || null }));
+        this._emit(msg(EVT.TASK_PROGRESS, { percent, message: message || null, extra: extra || null }));
       },
 
       done: (result) => {

@@ -394,6 +394,95 @@ function opConfirmMessage(op, count, dstPath) {
   return `${verb} ${noun} to:\n${dstPath}`;
 }
 
+// ─── Copy dialog helpers ─────────────────────────────────────────────────────
+
+/**
+ * Build the header line for the copy dialog configure phase.
+ * @param {string[]} sources  — source paths
+ * @param {string}   dst      — destination directory path
+ * @returns {string}
+ */
+function copyDialogHeader(sources, dst) {
+  if (sources.length === 1) {
+    const name = sources[0].split(/[/\\]/).filter(Boolean).pop() || sources[0];
+    return `Copy "${name}" to ${dst}`;
+  }
+  return `Copy ${sources.length} items to ${dst}`;
+}
+
+/**
+ * Build the summary report message after a copy operation.
+ *
+ * @param {object} stats
+ * @param {number} stats.copied          — items fully copied
+ * @param {number} stats.prefixed        — items copied with a (n) prefix
+ * @param {number} stats.replacedOlder   — files replaced (were older)
+ * @param {number} stats.skippedNewer    — files skipped (dest was newer/same)
+ * @param {number} stats.mergedFolders   — folders merged
+ * @param {number} stats.skippedSecurity — items skipped due to permissions
+ * @param {number} stats.aborted         — 0 or 1 (operation aborted mid-way)
+ * @param {string} [stats.abortReason]   — name of item that caused abort
+ * @param {string} dst                   — destination path
+ * @returns {string}
+ */
+function copyReport(stats, dst) {
+  const {
+    copied = 0, prefixed = 0, replacedOlder = 0, skippedNewer = 0,
+    mergedFolders = 0, skippedSecurity = 0, aborted = 0, abortReason = '',
+  } = stats;
+
+  if (aborted) {
+    const reason = abortReason
+      ? `"${abortReason}" already exists`
+      : 'a name conflict was encountered';
+    return `Copy aborted because ${reason}.`;
+  }
+
+  const parts = [];
+  const dstName = dst.split(/[/\\]/).filter(Boolean).pop() || dst;
+
+  // Main copy line
+  const mainCopied = copied + prefixed + replacedOlder;
+  if (mainCopied > 0) {
+    let line = `Copied ${mainCopied} item${mainCopied !== 1 ? 's' : ''} to ${dstName}`;
+    const qualifiers = [];
+    if (prefixed > 0)      qualifiers.push(`${prefixed} renamed with a prefix`);
+    if (replacedOlder > 0) qualifiers.push(`${replacedOlder} replaced older`);
+    if (skippedNewer > 0)  qualifiers.push(`${skippedNewer} skipped (destination newer)`);
+    if (qualifiers.length) line += ` (${qualifiers.join(', ')})`;
+    parts.push(line + '.');
+  } else {
+    parts.push(`Nothing was copied to ${dstName}.`);
+  }
+
+  if (mergedFolders > 0) {
+    parts.push(`Merged ${mergedFolders} folder${mergedFolders !== 1 ? 's' : ''}.`);
+  }
+  if (skippedSecurity > 0) {
+    parts.push(`Skipped ${skippedSecurity} item${skippedSecurity !== 1 ? 's' : ''} due to permission limitations.`);
+  }
+
+  return parts.join('\n');
+}
+
+/**
+ * Derive a suggested (n) prefix name that doesn't clash in dstDir.
+ * Pure function — takes an existing name set for O(1) lookup.
+ *
+ * @param {string}      name        — original filename or dirname
+ * @param {Set<string>} existingNames — names already present in destination
+ * @returns {string}                — prefixed name guaranteed not in existingNames
+ */
+function prefixedName(name, existingNames) {
+  if (!existingNames.has(name)) return name;
+  for (let n = 1; n <= 999; n++) {
+    const candidate = `(${n}) ${name}`;
+    if (!existingNames.has(candidate)) return candidate;
+  }
+  // Fallback — extremely unlikely
+  return `(${Date.now()}) ${name}`;
+}
+
 // ─── Exports (CommonJS for tests, also assigned to window for browser use) ───
 
 const uiState = {
@@ -416,6 +505,9 @@ const uiState = {
   escHtml,
   fkeyEnabledState,
   opConfirmMessage,
+  copyDialogHeader,
+  copyReport,
+  prefixedName,
 };
 
 // Always expose as a browser global when running in a browser context.

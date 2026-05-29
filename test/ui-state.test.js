@@ -310,6 +310,67 @@ describe('parentPath', () => {
 });
 
 
+// ─── Copy dialog helpers ─────────────────────────────────────────────────────
+
+describe('copyDialogHeader', () => {
+  test('single item uses filename', () => {
+    const h = S.copyDialogHeader(['/home/user/doc.txt'], '/dst');
+    assert.ok(h.includes('"doc.txt"'));
+    assert.ok(h.includes('/dst'));
+  });
+  test('multiple items uses count', () => {
+    const h = S.copyDialogHeader(['/a', '/b', '/c'], '/dst');
+    assert.ok(h.includes('3 items'));
+  });
+});
+
+describe('copyReport', () => {
+  test('abort with reason', () => {
+    const r = S.copyReport({ aborted: 1, abortReason: 'file.txt' }, '/dst');
+    assert.ok(r.includes('aborted'));
+    assert.ok(r.includes('"file.txt"'));
+  });
+  test('simple copy', () => {
+    const r = S.copyReport({ copied: 3 }, '/dst/folder');
+    assert.ok(r.includes('3 items'));
+    assert.ok(r.includes('folder'));
+  });
+  test('copy with prefixed and replaced', () => {
+    const r = S.copyReport({ copied: 2, prefixed: 1, replacedOlder: 1 }, '/dst');
+    assert.ok(r.includes('4 items'));
+    assert.ok(r.includes('renamed with a prefix'));
+    assert.ok(r.includes('replaced older'));
+  });
+  test('merged folders appended', () => {
+    const r = S.copyReport({ copied: 1, mergedFolders: 2 }, '/dst');
+    assert.ok(r.includes('Merged 2 folders'));
+  });
+  test('security skips appended', () => {
+    const r = S.copyReport({ copied: 1, skippedSecurity: 1 }, '/dst');
+    assert.ok(r.includes('permission'));
+  });
+  test('nothing copied', () => {
+    const r = S.copyReport({ copied: 0 }, '/dst');
+    assert.ok(r.toLowerCase().includes('nothing'));
+  });
+});
+
+describe('prefixedName', () => {
+  test('returns name unchanged if not in set', () => {
+    assert.equal(S.prefixedName('file.txt', new Set()), 'file.txt');
+  });
+  test('returns (1) prefix on first clash', () => {
+    assert.equal(S.prefixedName('file.txt', new Set(['file.txt'])), '(1) file.txt');
+  });
+  test('increments until free', () => {
+    const taken = new Set(['file.txt', '(1) file.txt', '(2) file.txt']);
+    assert.equal(S.prefixedName('file.txt', taken), '(3) file.txt');
+  });
+  test('works for directories (no extension)', () => {
+    assert.equal(S.prefixedName('MyDir', new Set(['MyDir'])), '(1) MyDir');
+  });
+});
+
 // ─── toggleSelection ─────────────────────────────────────────────────────────
 
 describe('toggleSelection', () => {

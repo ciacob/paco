@@ -78,6 +78,14 @@ const DEFAULT_CONFIG = {
   sortAsc:     true,
   dateFormat:  'locale', // 'locale' | 'iso'
   appName:     'Partial Commander',
+
+  // Copy dialog preferences — persisted between sessions
+  // File conflict strategies: 'abort' | 'replaceOlder' | 'replaceAll' | 'prefix'
+  // Folder conflict strategies: 'abort' | 'merge' | 'replace' | 'prefix'
+  copyConflictFiles:   'abort',
+  copyConflictFolders: 'abort',
+  copyShowReport:      true,
+  copyKeepOnAbort:     false,
 };
 
 // Maximum navigation history entries kept per panel

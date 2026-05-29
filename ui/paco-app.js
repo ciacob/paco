@@ -105,6 +105,7 @@
       dom.busyFill.style.width     = busy.pct + '%';
       dom.busyPct.textContent      = busy.pct + '%';
       dom.connDot.className        = 'conn-dot busy';
+      _copyDlgProgress(ws);
     } else if (s !== 'running') {
       appState = { ...appState, busy: false };
       dom.busyBar.classList.remove('visible');
@@ -135,9 +136,14 @@
       }
       if (payloads.length > 0) renderFkeys();
 
-      // Surface per-item errors from copy / move / delete
-      if (result.errors && result.errors.length > 0) {
+      // Surface per-item errors from move / delete (copy uses its own dialog)
+      if (result.errors && result.errors.length > 0 && !result.stats) {
         showError('Some items failed', result.errors.join('\n'));
+      }
+
+      // Copy dialog completion
+      if (result.stats !== undefined) {
+        _copyDlgDone(result);
       }
 
       // ── Boot sequencing ────────────────────────────────────────────────
@@ -485,6 +491,96 @@
       .catch(err => showError('New Folder failed', err.message));
   }
 
+  // ─── Copy dialog (three-phase) ───────────────────────────────────────────────
+
+  const copyDlg = {
+    bg:          document.getElementById('copy-dialog-bg'),
+    header:      document.getElementById('copy-dialog-header'),
+    configWrap:  document.getElementById('copy-configure-wrap'),
+    progressWrap:document.getElementById('copy-progress-wrap'),
+    reportWrap:  document.getElementById('copy-report-wrap'),
+    progressFill:document.getElementById('copy-progress-fill'),
+    progressStats:document.getElementById('copy-progress-stats'),
+    reportText:  document.getElementById('copy-report-text'),
+    reportRow:   document.getElementById('copy-report-row'),
+    keepRow:     document.getElementById('copy-keep-row'),
+    showReport:  document.getElementById('copy-show-report'),
+    keepOnAbort: document.getElementById('copy-keep-on-abort'),
+    cancelBtn:   document.getElementById('copy-cancel-btn'),
+    okBtn:       document.getElementById('copy-ok-btn'),
+  };
+
+  // Wire cancel/abort/close button
+  copyDlg.cancelBtn.addEventListener('click', () => {
+    if (copyDlg._phase === 'progress') {
+      // User is aborting — the task will finish with aborted:true and
+      // _copyDlgDone will handle showing the report. Just signal abort.
+      adapter.abort().catch(() => {});
+    } else if (copyDlg._phase === 'configure') {
+      // Cancel before starting — resolve with null to signal cancellation
+      const resolve = copyDlg._resolve;
+      copyDlg._resolve = null;
+      copyDlg._okHandler && copyDlg.okBtn.removeEventListener('click', copyDlg._okHandler);
+      copyDlg.bg.classList.remove('visible');
+      resolve && resolve(null);
+    } else {
+      // Report phase — just close
+      _copyDlgClose();
+    }
+  });
+
+  function _copyDlgPhase(phase) {
+    copyDlg._phase = phase;
+    copyDlg.configWrap.style.display   = phase === 'configure' ? '' : 'none';
+    copyDlg.progressWrap.style.display = phase === 'progress'  ? 'block' : 'none';
+    copyDlg.reportWrap.style.display   = phase === 'report'    ? 'block' : 'none';
+    copyDlg.reportRow.style.display    = phase === 'configure' ? 'flex' : 'none';
+    copyDlg.keepRow.style.display      = phase === 'progress'  ? 'flex' : 'none';
+    if (phase === 'configure') {
+      copyDlg.cancelBtn.textContent = 'Cancel';
+      copyDlg.cancelBtn.className   = 'copy-btn';
+      copyDlg.okBtn.style.display   = '';
+      copyDlg.okBtn.textContent     = 'Copy';
+    } else if (phase === 'progress') {
+      copyDlg.cancelBtn.textContent = 'Abort';
+      copyDlg.cancelBtn.className   = 'copy-btn danger';
+      copyDlg.okBtn.style.display   = 'none';
+    } else {
+      copyDlg.cancelBtn.textContent = 'Close';
+      copyDlg.cancelBtn.className   = 'copy-btn';
+      copyDlg.okBtn.style.display   = 'none';
+    }
+  }
+
+  function _copyDlgClose() {
+    copyDlg.bg.classList.remove('visible');
+    copyDlg._resolve && copyDlg._resolve();
+    copyDlg._resolve = null;
+  }
+
+  function _copyDlgPopulate(config) {
+    // Set radios from config
+    document.querySelectorAll('input[name=conflictFiles]').forEach(r => {
+      r.checked = r.value === (config.copyConflictFiles || 'abort');
+    });
+    document.querySelectorAll('input[name=conflictFolders]').forEach(r => {
+      r.checked = r.value === (config.copyConflictFolders || 'abort');
+    });
+    copyDlg.showReport.checked  = config.copyShowReport !== false;
+    copyDlg.keepOnAbort.checked = !!config.copyKeepOnAbort;
+  }
+
+  function _copyDlgRead() {
+    const filesVal   = document.querySelector('input[name=conflictFiles]:checked')?.value   || 'abort';
+    const foldersVal = document.querySelector('input[name=conflictFolders]:checked')?.value || 'abort';
+    return {
+      conflictFiles:   filesVal,
+      conflictFolders: foldersVal,
+      showReport:      copyDlg.showReport.checked,
+      keepOnAbort:     copyDlg.keepOnAbort.checked,
+    };
+  }
+
   async function cmdCopy() {
     if (appState.busy) return;
     const side  = appState.activePanel;
@@ -492,19 +588,126 @@
     const sel   = selArray(side);
     if (sel.length === 0) return;
     const dst = appState.panels[other].path;
-    if (!dst) return showError('Copy failed', 'Target panel has no open directory');
-    const confirmed = await showOverlay(
-      'Copy',
-      S.opConfirmMessage('copy', sel.length, dst),
-      [{ label: 'Cancel', value: false }, { label: 'Copy', cls: 'primary', value: true }]
-    );
-    if (!confirmed) return;
+    if (!dst) return showError('Copy', 'Target panel has no open directory');
+
+    // Check if destination is non-empty (quick check)
+    const dstEntries = appState.panels[other].entries || [];
+    const dstNonEmpty = dstEntries.length > 0;
+
+    // Show conflict options only if destination is non-empty
+    copyDlg.configWrap.querySelector('.copy-conflict-row').style.display =
+      dstNonEmpty ? 'flex' : 'none';
+
+    // Populate from persisted config
+    _copyDlgPopulate(appState.config);
+
+    // Set header
+    copyDlg.header.textContent = S.copyDialogHeader(sel, dst);
+
+    // Show dialog in configure phase
+    _copyDlgPhase('configure');
+    copyDlg.bg.classList.add('visible');
+
+    // Wait for OK or Cancel
+    const prefs = await new Promise(resolve => {
+      copyDlg._resolve = resolve;
+
+      const onOk = () => {
+        copyDlg.okBtn.removeEventListener('click', onOk);
+        copyDlg._okHandler = null;
+        copyDlg._resolve = null;
+        resolve(_copyDlgRead());
+      };
+      copyDlg._okHandler = onOk;
+      copyDlg.okBtn.addEventListener('click', onOk);
+    });
+
+    if (!prefs) return; // cancelled
+
+    // Persist prefs to config
+    appState = {
+      ...appState,
+      config: {
+        ...appState.config,
+        copyConflictFiles:   prefs.conflictFiles,
+        copyConflictFolders: prefs.conflictFolders,
+        copyShowReport:      prefs.showReport,
+        copyKeepOnAbort:     prefs.keepOnAbort,
+      },
+    };
+
+    // Store dst for report message
+    copyDlg._dst = dst;
+
+    // Switch to progress phase
+    _copyDlgPhase('progress');
+    copyDlg.header.textContent = 'Copy in progress…';
+    copyDlg.progressFill.style.width = '0%';
+    copyDlg.progressStats.textContent = '';
+    copyDlg.keepOnAbort.checked = prefs.keepOnAbort;
+
+    // Launch task
     adapter.assign('worker/tasks/copy.js', {
-      sources:  sel,
+      sources:         sel,
       dst,
-      panel:    side,
-      dstPanel: other,
-    }).catch(err => showError('Copy failed', err.message));
+      panel:           side,
+      dstPanel:        other,
+      conflictFiles:   prefs.conflictFiles,
+      conflictFolders: prefs.conflictFolders,
+      showHidden:      appState.config.showHidden,
+      keepOnAbort:     prefs.keepOnAbort,
+      showReport:      prefs.showReport,
+    }).catch(err => {
+      _copyDlgPhase('report');
+      copyDlg.header.textContent = 'Copy failed';
+      copyDlg.reportText.textContent = err.message;
+    });
+  }
+
+  // Handle progress updates for the copy dialog
+  function _copyDlgProgress(ws) {
+    if (copyDlg._phase !== 'progress') return;
+    const pct   = ws.percent || 0;
+    const extra = ws.extra || {};
+    copyDlg.progressFill.style.width = pct + '%';
+
+    const parts = [];
+    if (extra.itemCount > 0) {
+      parts.push(`Item ${(extra.itemIndex || 0) + 1} of ${extra.itemCount}`);
+    }
+    if (extra.kbTotal > 0) {
+      parts.push(`${extra.kbDone || 0} / ${extra.kbTotal} KB`);
+    }
+    if (extra.speedKbps > 0) {
+      parts.push(`${extra.speedKbps} KB/s`);
+    }
+    if (extra.etaSec != null) {
+      parts.push(`ETA ${_fmtEta(extra.etaSec)}`);
+    }
+    copyDlg.progressStats.textContent = parts.join('  ·  ');
+  }
+
+  function _fmtEta(sec) {
+    if (sec < 60)  return sec + 's';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+    return Math.floor(sec / 3600) + 'h ' + Math.floor((sec % 3600) / 60) + 'm';
+  }
+
+  // Handle copy task completion
+  function _copyDlgDone(result) {
+    if (!result) return;
+    const showReport = appState.config.copyShowReport !== false;
+    if (showReport) {
+      _copyDlgPhase('report');
+      copyDlg.header.textContent = result.aborted ? 'Copy aborted' : 'Copy complete';
+      copyDlg.reportText.textContent = S.copyReport(result.stats || {}, copyDlg._dst || '');
+      // Also show any non-fatal errors below the report
+      if (result.errors && result.errors.length > 0) {
+        copyDlg.reportText.textContent += '\n\nErrors:\n' + result.errors.join('\n');
+      }
+    } else {
+      _copyDlgClose();
+    }
   }
 
   async function cmdMove() {

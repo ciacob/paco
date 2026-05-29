@@ -265,7 +265,7 @@ describe('copy task', () => {
     assert.ok(ok, result && result.errors && result.errors[0]);
     assert.ok(fs.existsSync(path.join(dstDir, 'file.txt')));
     assert.equal(fs.readFileSync(path.join(dstDir, 'file.txt'), 'utf8'), 'content');
-    assert.equal(result.copied, 1);
+    assert.equal(result.stats.copied + (result.stats.prefixed||0) + (result.stats.replacedOlder||0), 1);
     assert.equal(result.errors.length, 0);
   });
 
@@ -279,17 +279,20 @@ describe('copy task', () => {
     assert.ok(fs.existsSync(src));
   });
 
-  test('appends (copy) suffix on collision', async () => {
+  test('appends (1) prefix on collision when conflictFiles=prefix', async () => {
     const src = path.join(srcDir, 'dup.txt');
     const existing = path.join(dstDir, 'dup.txt');
     await mkfile(src, 'new');
     await mkfile(existing, 'old');
     const task = require('../worker/tasks/copy');
-    const { ctx, promise } = makeCtx({ sources: [src], dst: dstDir, panel: 'left', dstPanel: 'right' });
+    const { ctx, promise } = makeCtx({
+      sources: [src], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'prefix',
+    });
     task.start(ctx);
     const { ok, result } = await promise;
     assert.ok(ok);
-    assert.ok(fs.existsSync(path.join(dstDir, 'dup (copy).txt')));
+    assert.ok(fs.existsSync(path.join(dstDir, '(1) dup.txt')));
     assert.equal(fs.readFileSync(existing, 'utf8'), 'old'); // original untouched
   });
 
@@ -316,7 +319,7 @@ describe('copy task', () => {
     task.start(ctx);
     const { ok, result } = await promise;
     assert.ok(ok);
-    assert.equal(result.copied, 2);
+    assert.equal(result.stats.copied + (result.stats.prefixed||0) + (result.stats.replacedOlder||0), 2);
     assert.ok(fs.existsSync(path.join(dstDir, 'a.txt')));
     assert.ok(fs.existsSync(path.join(dstDir, 'b.txt')));
   });
@@ -394,17 +397,20 @@ describe('move task', () => {
     assert.equal(result.errors.length, 0);
   });
 
-  test('handles collision with (copy) suffix', async () => {
+  test('handles collision with (1) prefix when conflictFiles=prefix', async () => {
     const src      = path.join(srcDir, 'dup.txt');
     const existing = path.join(dstDir, 'dup.txt');
     await mkfile(src, 'new');
     await mkfile(existing, 'old');
     const task = require('../worker/tasks/move');
-    const { ctx, promise } = makeCtx({ sources: [src], dst: dstDir, panel: 'left', dstPanel: 'right' });
+    const { ctx, promise } = makeCtx({
+      sources: [src], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'prefix',
+    });
     task.start(ctx);
     const { ok } = await promise;
     assert.ok(ok);
-    assert.ok(fs.existsSync(path.join(dstDir, 'dup (copy).txt')));
+    assert.ok(fs.existsSync(path.join(dstDir, '(1) dup.txt')));
     assert.equal(fs.readFileSync(existing, 'utf8'), 'old');
   });
 
