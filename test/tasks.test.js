@@ -393,7 +393,7 @@ describe('move task', () => {
     assert.ok(ok);
     assert.ok(!fs.existsSync(src));
     assert.ok(fs.existsSync(path.join(dstDir, 'move-me.txt')));
-    assert.equal(result.moved, 1);
+    assert.equal((result.stats.copied || 0) + (result.stats.prefixed || 0), 1);
     assert.equal(result.errors.length, 0);
   });
 

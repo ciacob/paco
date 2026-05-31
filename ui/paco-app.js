@@ -590,19 +590,13 @@
     const dst = appState.panels[other].path;
     if (!dst) return showError('Copy', 'Target panel has no open directory');
 
-    // Check if destination is non-empty (quick check)
-    const dstEntries = appState.panels[other].entries || [];
-    const dstNonEmpty = dstEntries.length > 0;
-
-    // Show conflict options only if destination is non-empty
-    copyDlg.configWrap.querySelector('.copy-conflict-row').style.display =
-      dstNonEmpty ? 'flex' : 'none';
-
     // Populate from persisted config
     _copyDlgPopulate(appState.config);
 
     // Set header
     copyDlg.header.textContent = S.copyDialogHeader(sel, dst);
+    copyDlg._mode = 'copy';
+    copyDlg.okBtn.textContent = 'Copy';
 
     // Show dialog in configure phase
     _copyDlgPhase('configure');
@@ -699,8 +693,9 @@
     const showReport = appState.config.copyShowReport !== false;
     if (showReport) {
       _copyDlgPhase('report');
-      copyDlg.header.textContent = result.aborted ? 'Copy aborted' : 'Copy complete';
-      copyDlg.reportText.textContent = S.copyReport(result.stats || {}, copyDlg._dst || '');
+      const modeLabel = copyDlg._mode === 'move' ? 'Move' : 'Copy';
+      copyDlg.header.textContent = result.aborted ? modeLabel + ' aborted' : modeLabel + ' complete';
+      copyDlg.reportText.textContent = S.copyReport(result.stats || {}, copyDlg._dst || '', copyDlg._mode);
       // Also show any non-fatal errors below the report
       if (result.errors && result.errors.length > 0) {
         copyDlg.reportText.textContent += '\n\nErrors:\n' + result.errors.join('\n');
@@ -717,19 +712,71 @@
     const sel   = selArray(side);
     if (sel.length === 0) return;
     const dst = appState.panels[other].path;
-    if (!dst) return showError('Move failed', 'Target panel has no open directory');
-    const confirmed = await showOverlay(
-      'Move',
-      S.opConfirmMessage('move', sel.length, dst),
-      [{ label: 'Cancel', value: false }, { label: 'Move', cls: 'primary', value: true }]
-    );
-    if (!confirmed) return;
+    if (!dst) return showError('Move', 'Target panel has no open directory');
+
+    // Reuse the copy dialog with move semantics
+    _copyDlgPopulate({
+      copyConflictFiles:   appState.config.moveConflictFiles   || 'abort',
+      copyConflictFolders: appState.config.moveConflictFolders || 'abort',
+      copyShowReport:      appState.config.moveShowReport !== false,
+      copyKeepOnAbort:     !!appState.config.moveKeepOnAbort,
+    });
+
+    copyDlg.header.textContent = S.copyDialogHeader(sel, dst).replace('Copy', 'Move');
+    copyDlg._dst  = dst;
+    copyDlg._mode = 'move';
+    copyDlg.okBtn.textContent = 'Move';
+
+    _copyDlgPhase('configure');
+    copyDlg.bg.classList.add('visible');
+
+    const prefs = await new Promise(resolve => {
+      copyDlg._resolve = resolve;
+      const onOk = () => {
+        copyDlg.okBtn.removeEventListener('click', onOk);
+        copyDlg._okHandler = null;
+        copyDlg._resolve = null;
+        resolve(_copyDlgRead());
+      };
+      copyDlg._okHandler = onOk;
+      copyDlg.okBtn.addEventListener('click', onOk);
+    });
+
+    if (!prefs) return;
+
+    // Persist move prefs
+    appState = {
+      ...appState,
+      config: {
+        ...appState.config,
+        moveConflictFiles:   prefs.conflictFiles,
+        moveConflictFolders: prefs.conflictFolders,
+        moveShowReport:      prefs.showReport,
+        moveKeepOnAbort:     prefs.keepOnAbort,
+      },
+    };
+
+    _copyDlgPhase('progress');
+    copyDlg.header.textContent = 'Move in progress…';
+    copyDlg.progressFill.style.width = '0%';
+    copyDlg.progressStats.textContent = '';
+    copyDlg.keepOnAbort.checked = prefs.keepOnAbort;
+
     adapter.assign('worker/tasks/move.js', {
-      sources:  sel,
+      sources:         sel,
       dst,
-      panel:    side,
-      dstPanel: other,
-    }).catch(err => showError('Move failed', err.message));
+      panel:           side,
+      dstPanel:        other,
+      conflictFiles:   prefs.conflictFiles,
+      conflictFolders: prefs.conflictFolders,
+      showHidden:      appState.config.showHidden,
+      keepOnAbort:     prefs.keepOnAbort,
+      showReport:      prefs.showReport,
+    }).catch(err => {
+      _copyDlgPhase('report');
+      copyDlg.header.textContent = 'Move failed';
+      copyDlg.reportText.textContent = err.message;
+    });
   }
 
   async function cmdDelete() {

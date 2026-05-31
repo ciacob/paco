@@ -425,7 +425,9 @@ function copyDialogHeader(sources, dst) {
  * @param {string} dst                   — destination path
  * @returns {string}
  */
-function copyReport(stats, dst) {
+function copyReport(stats, dst, mode) {
+  const verb = mode === 'move' ? 'Moved' : 'Copied';
+  const verbLower = mode === 'move' ? 'move' : 'copy';
   const {
     copied = 0, prefixed = 0, replacedOlder = 0, skippedNewer = 0,
     mergedFolders = 0, skippedSecurity = 0, aborted = 0, abortReason = '',
@@ -435,16 +437,16 @@ function copyReport(stats, dst) {
     const reason = abortReason
       ? `"${abortReason}" already exists`
       : 'a name conflict was encountered';
-    return `Copy aborted because ${reason}.`;
+    return `${verb.replace('d','')} aborted because ${reason}.`;
   }
 
   const parts = [];
   const dstName = dst.split(/[/\\]/).filter(Boolean).pop() || dst;
 
-  // Main copy line
+  // Main copy/move line
   const mainCopied = copied + prefixed + replacedOlder;
   if (mainCopied > 0) {
-    let line = `Copied ${mainCopied} item${mainCopied !== 1 ? 's' : ''} to ${dstName}`;
+    let line = `${verb} ${mainCopied} item${mainCopied !== 1 ? 's' : ''} to ${dstName}`;
     const qualifiers = [];
     if (prefixed > 0)      qualifiers.push(`${prefixed} renamed with a prefix`);
     if (replacedOlder > 0) qualifiers.push(`${replacedOlder} replaced older`);

@@ -86,6 +86,12 @@ const DEFAULT_CONFIG = {
   copyConflictFolders: 'abort',
   copyShowReport:      true,
   copyKeepOnAbort:     false,
+
+  // Move dialog preferences (same strategy options as copy)
+  moveConflictFiles:   'abort',
+  moveConflictFolders: 'abort',
+  moveShowReport:      true,
+  moveKeepOnAbort:     false,
 };
 
 // Maximum navigation history entries kept per panel
