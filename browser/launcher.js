@@ -125,6 +125,12 @@ function buildLaunchArgs(url, debugPort, opts = {}) {
     '--disable-translate',
     '--disable-infobars',
     `--remote-debugging-port=${debugPort}`,
+    // Suppress the macOS keychain "Chromium Safe Storage" access dialog.
+    // --password-store=basic uses plain unencrypted storage (fine for a
+    // local app shell that stores no user credentials).
+    // --use-mock-keychain is the macOS-specific belt-and-suspenders.
+    '--password-store=basic',
+    '--use-mock-keychain',
   ];
 
   // Window geometry — only applied when both dimensions are provided.
