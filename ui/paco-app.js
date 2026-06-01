@@ -87,6 +87,17 @@
       .catch(err => { console.error('[PACO] assign failed', err); showError('Navigation failed', err.message); });
   }
 
+  // Drain the watch queue: navigate panels one at a time.
+  // Called after a watch batch timer fires, and again from the done handler
+  // when _watchQueue still has entries.
+  function _drainWatchQueue() {
+    const queue = appState._watchQueue;
+    if (!queue || queue.length === 0 || appState.busy) return;
+    const side = queue[0];
+    appState = { ...appState, _watchQueue: queue.slice(1) };
+    navigate(side, appState.panels[side].path, { pushHistory: false });
+  }
+
   // ─── WS state handler ─────────────────────────────────────────────────────────
 
   adapter.onStateChange(function onWsMsg(ws) {
@@ -153,6 +164,12 @@
         resolve({ ok: true });
       }
 
+      // Continue draining watch queue if more panels need refreshing
+      if (appState._watchQueue && appState._watchQueue.length > 0) {
+        adapter.reset().then(() => _drainWatchQueue()).catch(() => {});
+        return;
+      }
+
       // ── Boot sequencing ────────────────────────────────────────────────
       const bootAction = S.nextBootAction(appState.bootPhase, ws);
       appState = { ...appState, bootPhase: S.advanceBootPhase(appState.bootPhase, bootAction.action) };
@@ -201,12 +218,20 @@
     // ── External change (watcher) ────────────────────────────────────────
     if (s === 'watch' && ws.panel && ws.path) {
       if (appState.bootPhase === 'ready' && !appState.busy) {
-        // Small delay so rapid consecutive events coalesce further
+        // Collect panels to refresh within a 200ms window, then refresh
+        // sequentially (left first, right after done) to handle the common
+        // case where both panels show the same directory.
+        const pending = appState._watchPending || new Set();
+        pending.add(ws.panel);
         clearTimeout(appState._watchTimer);
-        const side = ws.panel;
-        appState = { ...appState, _watchTimer: setTimeout(() => {
-          if (!appState.busy) navigate(side, appState.panels[side].path, { pushHistory: false });
-        }, 150) };
+        const timer = setTimeout(() => {
+          if (appState.busy) return;
+          // Refresh left first if needed, right will follow via _watchRight flag
+          const sides = [...pending].sort(); // 'left' before 'right'
+          appState = { ...appState, _watchPending: null, _watchTimer: null, _watchQueue: sides };
+          _drainWatchQueue();
+        }, 200);
+        appState = { ...appState, _watchPending: pending, _watchTimer: timer };
       }
       return;
     }
