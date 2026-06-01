@@ -86,7 +86,7 @@ module.exports = {
       if (trimmed.includes('/') || trimmed.includes('\\')) {
         return ctx.fail(
           'Folder name must not contain path separators.\n\n' +
-          'Tip: enable \u201cCreate sub-directories\u201d to create nested folders.'
+          'Tip: enable \u201cSub-directories mode\u201d to create nested folders.'
         );
       }
       if (trimmed === '.' || trimmed === '..') {
