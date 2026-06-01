@@ -138,19 +138,33 @@ describe('mkdir task', () => {
     const { ok, result } = await promise;
     assert.ok(ok, 'should succeed');
     assert.ok(fs.existsSync(path.join(workDir, 'alpha', 'beta', 'gamma')));
-    assert.equal(result.segments.length, 3);
+    assert.ok(result.created.endsWith('gamma'));
   });
 
-  test('subDirs mode: stops on first existing segment', async () => {
-    await fsp.mkdir(path.join(workDir, 'existing'));
+  test('subDirs mode: existing intermediate directory is silently accepted', async () => {
+    await fsp.mkdir(path.join(workDir, 'existing-inter'));
     const task = require('../worker/tasks/mkdir');
-    const { ctx, promise } = makeCtx({ panel: 'left', name: 'existing/child', subDirs: true });
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'existing-inter/child', subDirs: true });
     task.start(ctx);
-    const { ok, error } = await promise;
-    assert.ok(!ok);
-    assert.match(error, /already exists/i);
-    // child should NOT have been created
-    assert.ok(!fs.existsSync(path.join(workDir, 'existing', 'child')));
+    const { ok } = await promise;
+    assert.ok(ok, 'should succeed when intermediate already exists');
+    assert.ok(fs.existsSync(path.join(workDir, 'existing-inter', 'child')));
+  });
+
+  test('subDirs mode: can extend same branch twice (a/b/c then a/b/d)', async () => {
+    const task = require('../worker/tasks/mkdir');
+    const { ctx: ctx1, promise: p1 } = makeCtx({ panel: 'left', name: 'branch/level2/c', subDirs: true });
+    task.start(ctx1);
+    const r1 = await p1;
+    assert.ok(r1.ok, 'first branch creation should succeed');
+
+    purgeCache('worker/tasks');
+    const { ctx: ctx2, promise: p2 } = makeCtx({ panel: 'left', name: 'branch/level2/d', subDirs: true });
+    require('../worker/tasks/mkdir').start(ctx2);
+    const r2 = await p2;
+    assert.ok(r2.ok, 'second branch creation should succeed');
+    assert.ok(fs.existsSync(path.join(workDir, 'branch', 'level2', 'c')));
+    assert.ok(fs.existsSync(path.join(workDir, 'branch', 'level2', 'd')));
   });
 
   test('subDirs mode: validates each segment', async () => {
