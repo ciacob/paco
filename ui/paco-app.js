@@ -166,7 +166,7 @@
       const errMsg = ws.message || '';
       const isStateMachineViolation = /Cannot \w+ from state/.test(errMsg);
       if (!isStateMachineViolation) {
-        showError('Task error', errMsg || 'Unknown error');
+        showError('Error', errMsg || 'Unknown error');
         adapter.reset().catch(() => {});
       }
     }
@@ -434,8 +434,19 @@
 
   function showOverlay(title, msg, buttons, inputDefault) {
     return new Promise(resolve => {
-      dom.ovTitle.textContent           = title;
-      dom.ovMsg.textContent             = msg || '';
+      dom.ovTitle.textContent = title;
+      // Support “\n\n” as a paragraph break where the second paragraph
+      // renders in a muted secondary style (used for tips/hints).
+      dom.ovMsg.innerHTML = '';
+      const parts = (msg || '').split('\n\n');
+      parts.forEach((part, i) => {
+        const p = document.createElement('p');
+        p.textContent = part;
+        if (i > 0) {
+          p.style.cssText = 'margin-top:8px;font-size:11px;color:var(--text3);line-height:1.5;';
+        }
+        dom.ovMsg.appendChild(p);
+      });
       dom.ovInput.style.display         = inputDefault != null ? 'block' : 'none';
       dom.ovInput.value                 = inputDefault || '';
       dom.ovBtns.innerHTML              = '';

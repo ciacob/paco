@@ -89,8 +89,8 @@ module.exports = {
       const trimmed = name.trim();
       if (trimmed.includes('/') || trimmed.includes('\\')) {
         return ctx.fail(
-          'Folder name must not contain path separators.\n' +
-          'Tip: enable "Create sub-directories" to create nested folders.'
+          'Folder name must not contain path separators.\n\n' +
+          'Tip: enable “Create sub-directories” to create nested folders.'
         );
       }
       const err = validateSegment(trimmed);
@@ -109,9 +109,12 @@ module.exports = {
       const existing  = await provider.stat(candidate);
       if (existing) {
         firstClash = candidate;
+        const location = currentPath === panelPath
+            ? 'in the current directory'
+            : `in “${nodePath.relative(panelPath, currentPath)}”`;
         return ctx.fail(
-          `"${seg}" already exists` +
-          (segments.length > 1 ? ` (in ${nodePath.relative(panelPath, currentPath) || '.'})` : '')
+          `Folder “${seg}” already exists` +
+          (segments.length > 1 ? ` (${location})` : '')
         );
       }
       currentPath = candidate;
