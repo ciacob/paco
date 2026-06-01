@@ -327,8 +327,20 @@ describe('copyDialogHeader', () => {
 describe('copyReport', () => {
   test('abort with reason', () => {
     const r = S.copyReport({ aborted: 1, abortReason: 'file.txt' }, '/dst');
-    assert.ok(r.includes('aborted'));
-    assert.ok(r.includes('"file.txt"'));
+    assert.ok(r.includes('aborted'), 'should say aborted');
+    assert.ok(r.includes('"file.txt"'), 'should include filename');
+    assert.ok(r.startsWith('Copy'), 'default mode is copy');
+  });
+
+  test('abort with reason, move mode', () => {
+    const r = S.copyReport({ aborted: 1, abortReason: 'file.txt' }, '/dst', 'move');
+    assert.ok(r.startsWith('Move aborted'), 'should say Move aborted');
+  });
+
+  test('abort message is clean with no extra fields', () => {
+    const r = S.copyReport({ aborted: 1, abortReason: 'x' }, '/dst', 'move');
+    assert.ok(r.startsWith('Move aborted'));
+    assert.ok(!r.includes('undefined'));
   });
   test('simple copy', () => {
     const r = S.copyReport({ copied: 3 }, '/dst/folder');

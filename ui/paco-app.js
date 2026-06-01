@@ -540,7 +540,7 @@
       copyDlg.cancelBtn.textContent = 'Cancel';
       copyDlg.cancelBtn.className   = 'copy-btn';
       copyDlg.okBtn.style.display   = '';
-      copyDlg.okBtn.textContent     = 'Copy';
+      // okBtn.textContent is set by cmdCopy/cmdMove before calling this
     } else if (phase === 'progress') {
       copyDlg.cancelBtn.textContent = 'Abort';
       copyDlg.cancelBtn.className   = 'copy-btn danger';
@@ -690,7 +690,9 @@
   // Handle copy task completion
   function _copyDlgDone(result) {
     if (!result) return;
-    const showReport = appState.config.copyShowReport !== false;
+    const showReport = copyDlg._mode === 'move'
+      ? appState.config.moveShowReport !== false
+      : appState.config.copyShowReport !== false;
     if (showReport) {
       _copyDlgPhase('report');
       const modeLabel = copyDlg._mode === 'move' ? 'Move' : 'Copy';

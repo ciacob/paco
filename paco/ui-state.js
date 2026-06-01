@@ -426,8 +426,8 @@ function copyDialogHeader(sources, dst) {
  * @returns {string}
  */
 function copyReport(stats, dst, mode) {
-  const verb = mode === 'move' ? 'Moved' : 'Copied';
-  const verbLower = mode === 'move' ? 'move' : 'copy';
+  const verb    = mode === 'move' ? 'Moved'  : 'Copied';
+  const opNoun  = mode === 'move' ? 'Move'   : 'Copy';
   const {
     copied = 0, prefixed = 0, replacedOlder = 0, skippedNewer = 0,
     mergedFolders = 0, skippedSecurity = 0, aborted = 0, abortReason = '',
@@ -437,7 +437,7 @@ function copyReport(stats, dst, mode) {
     const reason = abortReason
       ? `"${abortReason}" already exists`
       : 'a name conflict was encountered';
-    return `${verb.replace('d','')} aborted because ${reason}.`;
+    return `${opNoun} aborted because ${reason}.`;
   }
 
   const parts = [];

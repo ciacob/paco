@@ -4,13 +4,19 @@
  * paco/copy-engine.js
  *
  * Shared engine for copy and move operations.
- * Both worker/tasks/copy.js and worker/tasks/move.js use this module.
  *
- * Exports:
- *   scanSize(itemPath, showHidden)  — recursive byte count
- *   resolvePrefixedName(src, dstDir) — (n) prefix collision resolution
- *   copyFile(src, dst, size, onBytes) — single file copy with throttled progress
- *   runCopyMove(ctx, config, isMove)  — full engine: copy or move a set of items
+ * Move strategy: copy-then-delete.
+ *   Phase 1 — copy everything to destination (same as copy operation)
+ *   Phase 2 — only if phase 1 completed without abort: delete all sources
+ *
+ * This gives move the same transactional guarantee as copy:
+ *   - On abort: destination copies are cleaned up (unless keepOnAbort),
+ *     sources are untouched
+ *   - On success: sources are deleted only after all copies are confirmed
+ *
+ * Same-volume renames are NOT used, sacrificing some speed for correctness.
+ * The difference is only material for very large directory trees on the same
+ * volume, which is an acceptable tradeoff.
  */
 
 const nodePath = require('path');
@@ -38,7 +44,7 @@ async function scanSize(itemPath, showHidden) {
   return sum;
 }
 
-// ─── Prefix-based collision resolution ────────────────────────────────────────
+// ─── Prefix-based collision resolution ───────────────────────────────────────
 
 async function resolvePrefixedName(srcPath, dstDir) {
   const base = nodePath.basename(srcPath);
@@ -155,11 +161,13 @@ async function copyDir(src, dst, opts, onBytes, copiedPaths) {
   return stats;
 }
 
-// ─── Cleanup ──────────────────────────────────────────────────────────────────
+// ─── Cleanup helpers ──────────────────────────────────────────────────────────
 
-async function cleanupCopied(paths) {
-  for (const p of paths) {
-    try { await provider.remove(p); } catch (_) {}
+async function removeAll(paths, progressLabel, ctx) {
+  for (let i = 0; i < paths.length; i++) {
+    const pct = Math.round(96 + (i / Math.max(1, paths.length)) * 2);
+    ctx.progress(pct, progressLabel, {});
+    try { await provider.remove(paths[i]); } catch (_) {}
   }
 }
 
@@ -168,16 +176,17 @@ async function cleanupCopied(paths) {
 /**
  * Run a copy or move operation.
  *
+ * For moves: copies everything first, then deletes sources only if the full
+ * copy phase completed without abort. On abort, sources are never touched.
+ *
  * @param {object}  ctx     — task context (progress, isCancelled, fail, done)
  * @param {object}  config  — task config
- * @param {boolean} isMove  — true = delete source after successful copy
+ * @param {boolean} isMove  — true = delete sources after successful copy
  */
 async function runCopyMove(ctx, config, isMove) {
   const {
     sources,
     dst,
-    panel,
-    dstPanel,
     conflictFiles   = 'abort',
     conflictFolders = 'abort',
     showHidden      = false,
@@ -187,27 +196,25 @@ async function runCopyMove(ctx, config, isMove) {
 
   const verb = isMove ? 'Moving' : 'Copying';
 
-  // ── Validate ─────────────────────────────────────────────────────────────────
+  // ── Validate & persist prefs ──────────────────────────────────────────────
   ctx.progress(2, 'Validating…', {});
   const context = require('./context');
   helpers.boot();
 
-  // Persist prefs
-  context.updateConfig({ conflictFiles, conflictFolders, keepOnAbort, showReport });
-  if (!isMove) {
-    context.updateConfig({
-      copyConflictFiles: conflictFiles, copyConflictFolders: conflictFolders,
-      copyKeepOnAbort: keepOnAbort, copyShowReport: showReport,
-    });
-  } else {
+  if (isMove) {
     context.updateConfig({
       moveConflictFiles: conflictFiles, moveConflictFolders: conflictFolders,
       moveKeepOnAbort: keepOnAbort, moveShowReport: showReport,
     });
+  } else {
+    context.updateConfig({
+      copyConflictFiles: conflictFiles, copyConflictFolders: conflictFolders,
+      copyKeepOnAbort: keepOnAbort, copyShowReport: showReport,
+    });
   }
 
   if (!sources || sources.length === 0) return ctx.fail('No source items specified');
-  if (!dst) return ctx.fail('No destination specified');
+  if (!dst)                             return ctx.fail('No destination specified');
 
   const dstStat = await provider.stat(dst);
   if (!dstStat)               return ctx.fail(`Destination does not exist: ${dst}`);
@@ -219,13 +226,11 @@ async function runCopyMove(ctx, config, isMove) {
       return ctx.fail(`Cannot ${isMove ? 'move' : 'copy'} "${nodePath.basename(src)}" into itself`);
   }
 
-  // ── Pre-scan sizes ────────────────────────────────────────────────────────────
+  // ── Phase 1: scan sizes ───────────────────────────────────────────────────
   ctx.progress(3, 'Scanning…', {});
   const sizes = [];
   for (const src of sources) {
     if (ctx.isCancelled()) return ctx.fail('Cancelled');
-    // For same-volume moves, rename is instant — size scan still needed for
-    // cross-volume fallback, but we do it anyway for progress accuracy.
     sizes.push(await scanSize(src, showHidden));
   }
 
@@ -233,9 +238,10 @@ async function runCopyMove(ctx, config, isMove) {
   const startTime = Date.now();
   let   doneBytes = 0;
   let   doneKb    = 0;
-  const copiedPaths = [];
+  const copiedPaths   = [];  // destination paths created — cleaned up on abort
+  const sourcesToDelete = []; // source paths to delete after successful copy (move only)
 
-  function pushProgress(pct, itemIndex, itemName, itemKbDone, itemKbTotal) {
+  function pushProgress(pct, itemIndex, itemName) {
     const elapsedSec = (Date.now() - startTime) / 1000 || 0.001;
     const speedKbps  = Math.round(doneKb / elapsedSec);
     const remaining  = totalKb - doneKb;
@@ -246,7 +252,7 @@ async function runCopyMove(ctx, config, isMove) {
     });
   }
 
-  // ── Process items ─────────────────────────────────────────────────────────────
+  // ── Phase 2: copy ─────────────────────────────────────────────────────────
   const totalStats = {
     copied:0, prefixed:0, replacedOlder:0, skippedNewer:0,
     mergedFolders:0, skippedSecurity:0, aborted:0, abortReason:'',
@@ -263,10 +269,10 @@ async function runCopyMove(ctx, config, isMove) {
 
     if (!srcStat || (srcStat.hidden && !showHidden)) continue;
 
-    pushProgress(Math.round(5 + (i / sources.length) * 88), i, srcName, 0, sizes[i] / 1024);
+    pushProgress(Math.round(5 + (i / sources.length) * 85), i, srcName);
 
     if (srcStat.type === 'dir') {
-      // ── Directory ────────────────────────────────────────────────────────────
+      // ── Directory ──────────────────────────────────────────────────────────
       const dstPath   = nodePath.join(dst, srcName);
       const dstExists = await provider.stat(dstPath);
 
@@ -279,27 +285,13 @@ async function runCopyMove(ctx, config, isMove) {
           try { await provider.remove(dstPath); }
           catch (e) { errors.push(`${srcName}: ${e.message}`); continue; }
         }
+        if (conflictFolders === 'merge') totalStats.mergedFolders++;
       }
 
       let effectiveDst = dstPath;
       if (dstExists && conflictFolders === 'prefix') {
         effectiveDst = await resolvePrefixedName(src, dst);
         totalStats.prefixed++;
-      }
-      if (dstExists && conflictFolders === 'merge') totalStats.mergedFolders++;
-
-      // Try fast rename first (same volume, move only)
-      if (isMove && !dstExists) {
-        try {
-          await provider.rename(src, effectiveDst);
-          totalStats.copied++;
-          doneBytes += sizes[i];
-          doneKb = Math.round(doneBytes / 1024);
-          continue;
-        } catch (e) {
-          if (e.code !== 'EXDEV') { errors.push(`${srcName}: ${e.message}`); continue; }
-          // Cross-volume: fall through to copy+delete
-        }
       }
 
       const opts = {
@@ -320,13 +312,13 @@ async function runCopyMove(ctx, config, isMove) {
         totalStats.skippedNewer   += sub.skippedNewer;
         totalStats.skippedSecurity+= sub.skippedSecurity;
         copiedPaths.push(effectiveDst);
-        if (isMove) await provider.remove(src);
+        if (isMove) sourcesToDelete.push(src);
         doneBytes += sizes[i];
         doneKb = Math.round(doneBytes / 1024);
       } catch (e) { errors.push(`${srcName}: ${e.message}`); }
 
     } else {
-      // ── File ─────────────────────────────────────────────────────────────────
+      // ── File ───────────────────────────────────────────────────────────────
       const dstPath   = nodePath.join(dst, srcName);
       const dstExists = await provider.stat(dstPath);
 
@@ -353,26 +345,15 @@ async function runCopyMove(ctx, config, isMove) {
         totalStats.copied++;
       }
 
-      // Try fast rename for same-volume moves
-      if (isMove && effectiveDst === dstPath && !dstExists) {
-        try {
-          await provider.rename(src, effectiveDst);
-          doneBytes += sizes[i]; doneKb = Math.round(doneBytes / 1024);
-          continue;
-        } catch (e) {
-          if (e.code !== 'EXDEV') { errors.push(`${srcName}: ${e.message}`); continue; }
-        }
-      }
-
       try {
         await copyFile(src, effectiveDst, sizes[i], (bd, bt) => {
           doneBytes = sizes.slice(0, i).reduce((a, b) => a + b, 0) + bd;
           doneKb = Math.round(doneBytes / 1024);
-          const pct = Math.round(5 + ((i + bd / Math.max(1, bt)) / sources.length) * 88);
-          pushProgress(pct, i, srcName, Math.round(bd / 1024), Math.round(sizes[i] / 1024));
+          const pct = Math.round(5 + ((i + bd / Math.max(1, bt)) / sources.length) * 85);
+          pushProgress(pct, i, srcName);
         });
         copiedPaths.push(effectiveDst);
-        if (isMove) await provider.remove(src);
+        if (isMove) sourcesToDelete.push(src);
         doneBytes = sizes.slice(0, i + 1).reduce((a, b) => a + b, 0);
         doneKb = Math.round(doneBytes / 1024);
       } catch (e) {
@@ -382,14 +363,18 @@ async function runCopyMove(ctx, config, isMove) {
     }
   }
 
-  // ── Abort cleanup ─────────────────────────────────────────────────────────────
+  // ── Phase 3a: abort cleanup (destination) ─────────────────────────────────
   if (aborted && !keepOnAbort) {
-    ctx.progress(96, 'Reverting…', {});
-    await cleanupCopied(copiedPaths);
+    await removeAll(copiedPaths, 'Reverting…', ctx);
   }
 
-  // ── Refresh panels ────────────────────────────────────────────────────────────
-  ctx.progress(98, 'Refreshing…', {});
+  // ── Phase 3b: delete sources (move only, copy phase must have completed) ──
+  if (isMove && !aborted && sourcesToDelete.length > 0) {
+    await removeAll(sourcesToDelete, 'Removing originals…', ctx);
+  }
+
+  // ── Phase 4: refresh panels ───────────────────────────────────────────────
+  ctx.progress(99, 'Refreshing…', {});
   const panels = await helpers.refreshBothPanels();
 
   ctx.progress(100, aborted ? 'Aborted' : 'Done', {});
