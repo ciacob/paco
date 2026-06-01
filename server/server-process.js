@@ -89,12 +89,21 @@ boot().catch((err) => {
 // Expose current state for the WS feed to send on new connections
 module.exports.getCurrentState = () => latestWorkerState;
 
+// Start the directory watcher — broadcasts {state:'watch'} to WS clients
+// when panel directories change externally (e.g. Trash restore, Finder copy).
+const watcher = require('../paco/watcher');
+watcher.start((msg) => require('./ws/status-feed').broadcast(msg));
+
 // IPC: receive state pushes from main, fan out to WebSocket clients
 process.on('message', (envelope) => {
   if (!envelope || !envelope.type) return;
   if (envelope.type === SRV.STATE_PUSH) {
     latestWorkerState = envelope.payload || latestWorkerState;
     require('./ws/status-feed').broadcast(latestWorkerState);
+    // If a task just completed (idle after done), refresh watcher paths
+    if (latestWorkerState.state === 'idle') {
+      watcher.update();
+    }
   }
 });
 

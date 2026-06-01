@@ -198,6 +198,19 @@
       adapter.reset().catch(() => {});
     }
 
+    // ── External change (watcher) ────────────────────────────────────────
+    if (s === 'watch' && ws.panel && ws.path) {
+      if (appState.bootPhase === 'ready' && !appState.busy) {
+        // Small delay so rapid consecutive events coalesce further
+        clearTimeout(appState._watchTimer);
+        const side = ws.panel;
+        appState = { ...appState, _watchTimer: setTimeout(() => {
+          if (!appState.busy) navigate(side, appState.panels[side].path, { pushHistory: false });
+        }, 150) };
+      }
+      return;
+    }
+
     // ── Boot trigger on first idle ───────────────────────────────────────
     const bootAction = S.nextBootAction(appState.bootPhase, ws);
     console.log('[PACO boot]', appState.bootPhase, s, '->', bootAction.action);
