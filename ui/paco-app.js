@@ -905,20 +905,81 @@
     });
   }
 
+  // ─── Delete dialog ───────────────────────────────────────────────────────────
+
+  const deleteDlg = {
+    bg:          document.getElementById('delete-dialog-bg'),
+    title:       document.getElementById('delete-dialog-title'),
+    msg:         document.getElementById('delete-dialog-msg'),
+    trashRow:    document.getElementById('delete-trash-row'),
+    toTrash:     document.getElementById('delete-to-trash'),
+    cancelBtn:   document.getElementById('delete-cancel'),
+    confirmBtn:  document.getElementById('delete-confirm'),
+  };
+
+  function _updateDeleteBtn() {
+    const trash = deleteDlg.toTrash.checked;
+    deleteDlg.title.textContent       = trash ? 'Move to Trash' : 'Delete Permanently';
+    deleteDlg.confirmBtn.textContent  = trash ? 'Move to Trash' : 'Delete Permanently';
+    deleteDlg.confirmBtn.className    = trash ? 'copy-btn primary' : 'copy-btn danger';
+  }
+
+  deleteDlg.toTrash.addEventListener('change', _updateDeleteBtn);
+
+  deleteDlg.bg.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); deleteDlg.cancelBtn.click(); }
+    if (e.key === 'Enter')  { e.preventDefault(); deleteDlg.confirmBtn.click(); }
+  });
+
   async function cmdDelete() {
     if (appState.busy) return;
-    const side = appState.activePanel;
-    const sel  = selArray(side);
+    const side  = appState.activePanel;
+    const sel   = selArray(side);
     if (sel.length === 0) return;
-    const confirmed = await showOverlay(
-      'Delete',
-      `Permanently delete ${sel.length} item${sel.length > 1 ? 's' : ''}?`,
-      [{ label: 'Cancel', value: false }, { label: 'Delete', cls: 'danger', value: true }]
-    );
+
+    const count = sel.length;
+    const noun  = count === 1 ? '1 item' : `${count} items`;
+
+    // Pre-populate from config
+    deleteDlg.toTrash.checked = appState.config.deleteToTrash !== false;
+    _updateDeleteBtn();
+    deleteDlg.msg.textContent = deleteDlg.toTrash.checked
+      ? `Move ${noun} to the system trash?`
+      : `Permanently delete ${noun}? This cannot be undone.`;
+
+    // Update message when checkbox changes
+    const onTrashChange = () => {
+      deleteDlg.msg.textContent = deleteDlg.toTrash.checked
+        ? `Move ${noun} to the system trash?`
+        : `Permanently delete ${noun}? This cannot be undone.`;
+    };
+    deleteDlg.toTrash.addEventListener('change', onTrashChange);
+
+    deleteDlg.bg.classList.add('visible');
+    setTimeout(() => deleteDlg.bg.focus(), 30);
+
+    const confirmed = await new Promise(resolve => {
+      const onCancel  = () => { cleanup(); resolve(false); };
+      const onConfirm = () => { cleanup(); resolve(true); };
+      function cleanup() {
+        deleteDlg.cancelBtn.removeEventListener('click', onCancel);
+        deleteDlg.confirmBtn.removeEventListener('click', onConfirm);
+        deleteDlg.toTrash.removeEventListener('change', onTrashChange);
+        deleteDlg.bg.classList.remove('visible');
+      }
+      deleteDlg.cancelBtn.addEventListener('click', onCancel);
+      deleteDlg.confirmBtn.addEventListener('click', onConfirm);
+    });
+
     if (!confirmed) return;
+
+    const useTrash = deleteDlg.toTrash.checked;
+    appState = { ...appState, config: { ...appState.config, deleteToTrash: useTrash } };
+
     adapter.assign('worker/tasks/delete.js', {
       sources: sel,
       panel:   side,
+      toTrash: useTrash,
     }).catch(err => showError('Delete failed', err.message));
   }
 

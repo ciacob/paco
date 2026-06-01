@@ -250,7 +250,7 @@ describe('delete task', () => {
     const filePath = path.join(workDir, 'to-delete.txt');
     await mkfile(filePath);
     const task = require('../worker/tasks/delete');
-    const { ctx, promise } = makeCtx({ panel: 'left', sources: [filePath] });
+    const { ctx, promise } = makeCtx({ panel: 'left', sources: [filePath], toTrash: false });
     task.start(ctx);
     const { ok, result } = await promise;
     assert.ok(ok);
@@ -264,7 +264,7 @@ describe('delete task', () => {
     await fsp.mkdir(path.join(dirPath, 'sub'), { recursive: true });
     await mkfile(path.join(dirPath, 'sub', 'file.txt'));
     const task = require('../worker/tasks/delete');
-    const { ctx, promise } = makeCtx({ panel: 'left', sources: [dirPath] });
+    const { ctx, promise } = makeCtx({ panel: 'left', sources: [dirPath], toTrash: false });
     task.start(ctx);
     const { ok, result } = await promise;
     assert.ok(ok);
@@ -277,7 +277,7 @@ describe('delete task', () => {
     const b = path.join(workDir, 'del-b.txt');
     await mkfile(a); await mkfile(b);
     const task = require('../worker/tasks/delete');
-    const { ctx, promise } = makeCtx({ panel: 'left', sources: [a, b] });
+    const { ctx, promise } = makeCtx({ panel: 'left', sources: [a, b], toTrash: false });
     task.start(ctx);
     const { ok, result } = await promise;
     assert.ok(ok);
@@ -292,7 +292,7 @@ describe('delete task', () => {
     await mkfile(real);
     const task = require('../worker/tasks/delete');
     // ghost doesn't exist — remove() with force: true won't error, so deleted = 2
-    const { ctx, promise } = makeCtx({ panel: 'left', sources: [real, ghost] });
+    const { ctx, promise } = makeCtx({ panel: 'left', sources: [real, ghost], toTrash: false });
     task.start(ctx);
     const { ok, result } = await promise;
     assert.ok(ok);
@@ -302,7 +302,7 @@ describe('delete task', () => {
 
   test('fails with no sources', async () => {
     const task = require('../worker/tasks/delete');
-    const { ctx, promise } = makeCtx({ panel: 'left', sources: [] });
+    const { ctx, promise } = makeCtx({ panel: 'left', sources: [], toTrash: false });
     task.start(ctx);
     const { ok } = await promise;
     assert.ok(!ok);
@@ -312,7 +312,7 @@ describe('delete task', () => {
     const filePath = path.join(workDir, 'gone.txt');
     await mkfile(filePath);
     const task = require('../worker/tasks/delete');
-    const { ctx, promise } = makeCtx({ panel: 'left', sources: [filePath] });
+    const { ctx, promise } = makeCtx({ panel: 'left', sources: [filePath], toTrash: false });
     task.start(ctx);
     const { result } = await promise;
     assert.ok(!result.entries.find(e => e.name === 'gone.txt'));

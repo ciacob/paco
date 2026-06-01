@@ -87,6 +87,9 @@ const DEFAULT_CONFIG = {
   copyShowReport:      true,
   copyKeepOnAbort:     false,
 
+  // Delete
+  deleteToTrash: true,   // if true, move to system trash/recycle bin instead of permanent delete
+
   // New Folder dialog
   mkdirSubDirs: false,  // if true, path separators create nested directories
 
