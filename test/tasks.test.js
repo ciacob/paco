@@ -207,6 +207,32 @@ describe('mkdir task', () => {
     assert.match(error, /already exists/i);
   });
 
+  test('single-folder mode: fails when a file exists with that name', async () => {
+    await fsp.writeFile(path.join(workDir, 'clash-file'), 'data');
+    const task = require('../worker/tasks/mkdir');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'clash-file', subDirs: false });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /already exists/i);
+  });
+
+  test('rejects "." as a name', async () => {
+    const task = require('../worker/tasks/mkdir');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: '.', subDirs: false });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(!ok);
+  });
+
+  test('rejects ".." as a name', async () => {
+    const task = require('../worker/tasks/mkdir');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: '..', subDirs: false });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(!ok);
+  });
+
   test('reports progress through the operation', async () => {
     const task = require('../worker/tasks/mkdir');
     const { ctx, promise } = makeCtx({ panel: 'left', name: 'progress-test' });
@@ -516,6 +542,121 @@ describe('copy task', () => {
     assert.ok(fs.existsSync(path.join(dstDir, 'visible.txt')));
   });
 
+  test('replaceAll: overwrites destination regardless of age', async () => {
+    const srcFile = path.join(srcDir, 'replace-me.txt');
+    const dstFile = path.join(dstDir, 'replace-me.txt');
+    await mkfile(srcFile, 'new content');
+    await mkfile(dstFile, 'old content');
+    // Make dst newer so replaceOlder would skip it — replaceAll should still overwrite
+    const future = new Date(Date.now() + 10000);
+    await fsp.utimes(dstFile, future, future);
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [srcFile], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'replaceAll',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(ok);
+    assert.equal(fs.readFileSync(dstFile, 'utf8'), 'new content');
+  });
+
+  test('conflictFolders: replace removes existing dir and copies fresh', async () => {
+    const srcD = path.join(srcDir, 'repdir');
+    const dstD = path.join(dstDir, 'repdir');
+    await fsp.mkdir(srcD, { recursive: true });
+    await mkfile(path.join(srcD, 'new.txt'), 'new');
+    await fsp.mkdir(dstD, { recursive: true });
+    await mkfile(path.join(dstD, 'old.txt'), 'old');
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [path.join(srcDir, 'repdir')], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFolders: 'replace',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(ok);
+    // old.txt should be gone (dir was replaced), new.txt should be present
+    assert.ok(!fs.existsSync(path.join(dstD, 'old.txt')), 'old content should be replaced');
+    assert.ok(fs.existsSync(path.join(dstD, 'new.txt')));
+  });
+
+  test('conflictFolders: merge combines contents of both dirs', async () => {
+    const srcD = path.join(srcDir, 'mergedir');
+    const dstD = path.join(dstDir, 'mergedir');
+    await fsp.mkdir(srcD, { recursive: true });
+    await fsp.mkdir(dstD, { recursive: true });
+    await mkfile(path.join(srcD, 'from-src.txt'), 'src');
+    await mkfile(path.join(dstD, 'from-dst.txt'), 'dst');
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [path.join(srcDir, 'mergedir')], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFolders: 'merge',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.ok(fs.existsSync(path.join(dstD, 'from-src.txt')), 'src file should be present after merge');
+    assert.ok(fs.existsSync(path.join(dstD, 'from-dst.txt')), 'dst file should survive merge');
+    assert.equal(result.stats.mergedFolders, 1);
+  });
+
+  test('conflictFolders: prefix keeps both dirs side by side', async () => {
+    const srcD = path.join(srcDir, 'prefdir');
+    const dstD = path.join(dstDir, 'prefdir');
+    await fsp.mkdir(srcD, { recursive: true });
+    await fsp.mkdir(dstD, { recursive: true });
+    await mkfile(path.join(srcD, 'src.txt'), 'src');
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [path.join(srcDir, 'prefdir')], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFolders: 'prefix',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(ok);
+    assert.ok(fs.existsSync(path.join(dstDir, '(1) prefdir', 'src.txt')), 'prefixed dir should be created');
+    assert.ok(fs.existsSync(dstD), 'original dir should be untouched');
+  });
+
+  test('showHidden=true includes hidden files', async () => {
+    await mkfile(path.join(srcDir, '.hidden-include'), 'h');
+    await mkfile(path.join(srcDir, 'visible.txt'), 'v');
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [path.join(srcDir, '.hidden-include'), path.join(srcDir, 'visible.txt')],
+      dst: dstDir, panel: 'left', dstPanel: 'right', showHidden: true,
+    });
+    task.start(ctx);
+    await promise;
+    assert.ok(fs.existsSync(path.join(dstDir, '.hidden-include')), 'hidden file should be copied when showHidden=true');
+    assert.ok(fs.existsSync(path.join(dstDir, 'visible.txt')));
+  });
+
+  test('isCancelled abort mid-copy cleans up', async () => {
+    // Create enough files that cancellation happens after first copy
+    const files = ['cancel-a.txt', 'cancel-b.txt', 'cancel-c.txt'];
+    for (const f of files) await mkfile(path.join(srcDir, f), 'x'.repeat(1024));
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: files.map(f => path.join(srcDir, f)),
+      dst: dstDir, panel: 'left', dstPanel: 'right',
+    });
+    // Cancel after first progress call
+    let cancelled = false;
+    const origProgress = ctx.progress.bind(ctx);
+    let calls = 0;
+    ctx.progress = (pct, msg, extra) => {
+      calls++;
+      if (calls > 3 && !cancelled) { cancelled = true; ctx.cancel(); }
+      origProgress(pct, msg, extra);
+    };
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok); // task completes (reports abort), not fails
+    assert.ok(result.aborted);
+  });
+
   test('recursive directory copy reports progress at each file', async () => {
     const subDir = path.join(srcDir, 'tree');
     await fsp.mkdir(path.join(subDir, 'sub'), { recursive: true });
@@ -634,6 +775,80 @@ describe('move task', () => {
     // Both sources must still exist — phase 3b never runs on abort
     assert.ok(fs.existsSync(src1), 'source 1 should be untouched after abort');
     assert.ok(fs.existsSync(src2), 'source 2 should be untouched after abort');
+  });
+
+  test('moves multiple files, all sources deleted', async () => {
+    const a = path.join(srcDir, 'mv-multi-a.txt');
+    const b = path.join(srcDir, 'mv-multi-b.txt');
+    await mkfile(a, 'aaa'); await mkfile(b, 'bbb');
+    const task = require('../worker/tasks/move');
+    const { ctx, promise } = makeCtx({
+      sources: [a, b], dst: dstDir, panel: 'left', dstPanel: 'right',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.ok(!fs.existsSync(a) && !fs.existsSync(b), 'all sources deleted after move');
+    assert.ok(fs.existsSync(path.join(dstDir, 'mv-multi-a.txt')));
+    assert.ok(fs.existsSync(path.join(dstDir, 'mv-multi-b.txt')));
+  });
+
+  test('replaceOlder: skips newer destination file during move', async () => {
+    const src = path.join(srcDir, 'mv-old.txt');
+    const dst2 = path.join(dstDir, 'mv-old.txt');
+    await mkfile(src, 'src');
+    await mkfile(dst2, 'dst');
+    const future = new Date(Date.now() + 10000);
+    await fsp.utimes(dst2, future, future);
+    const task = require('../worker/tasks/move');
+    const { ctx, promise } = makeCtx({
+      sources: [src], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'replaceOlder',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.stats.skippedNewer, 1);
+    // dst content unchanged, src still exists (was skipped, not moved)
+    assert.equal(fs.readFileSync(dst2, 'utf8'), 'dst');
+  });
+
+  test('conflictFolders: merge during move leaves source deleted', async () => {
+    const srcD = path.join(srcDir, 'mv-merge');
+    const dstD = path.join(dstDir, 'mv-merge');
+    await fsp.mkdir(srcD, { recursive: true });
+    await fsp.mkdir(dstD, { recursive: true });
+    await mkfile(path.join(srcD, 'from-src.txt'), 'src');
+    await mkfile(path.join(dstD, 'from-dst.txt'), 'dst');
+    const task = require('../worker/tasks/move');
+    const { ctx, promise } = makeCtx({
+      sources: [srcD], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFolders: 'merge',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.ok(fs.existsSync(path.join(dstD, 'from-src.txt')));
+    assert.ok(fs.existsSync(path.join(dstD, 'from-dst.txt')));
+    assert.ok(!fs.existsSync(srcD), 'source dir deleted after successful merge-move');
+    assert.equal(result.stats.mergedFolders, 1);
+  });
+
+  test('hidden files excluded during move when showHidden=false', async () => {
+    const hidden = path.join(srcDir, '.mv-hidden');
+    const visible = path.join(srcDir, 'mv-visible.txt');
+    await mkfile(hidden, 'h'); await mkfile(visible, 'v');
+    const task = require('../worker/tasks/move');
+    const { ctx, promise } = makeCtx({
+      sources: [hidden, visible], dst: dstDir, panel: 'left', dstPanel: 'right',
+      showHidden: false,
+    });
+    task.start(ctx);
+    await promise;
+    assert.ok(fs.existsSync(hidden),  'hidden source should not be moved');
+    assert.ok(!fs.existsSync(visible), 'visible source should be deleted');
+    assert.ok(!fs.existsSync(path.join(dstDir, '.mv-hidden')));
+    assert.ok(fs.existsSync(path.join(dstDir, 'mv-visible.txt')));
   });
 
   test('move directory: source dir deleted after success', async () => {
