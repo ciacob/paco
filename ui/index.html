@@ -361,10 +361,7 @@
     }
     .entry:hover { background: var(--entry-hover); }
     .entry.selected { background: var(--sel-bg); }
-    /* Selection indicated by background only — no text color change,
-       which would conflict with folder blue and cause confusion */
-    .entry.selected .entry-name { color: inherit; }
-    .entry-icon {
+.entry-icon {
       width: 16px; flex-shrink: 0;
       font-size: 11px; text-align: center;
       margin-right: 4px; color: var(--text3);
@@ -374,7 +371,11 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       font-size: 12px; color: var(--text);
     }
-    .entry.selected .entry-name { color: var(--sel-text); }
+    /* Selection: background only — no text color change to avoid
+       confusion with folder blue on selected items */
+    .entry.selected .entry-name,
+    .entry.selected .entry-name.is-dir,
+    .entry.selected .entry-name.is-link { color: var(--text); }
     .entry-name.is-dir  { color: var(--dir-color); font-weight: 500; }
     .entry-name.is-link { color: var(--link-color); font-style: italic; }
     .entry-size {
