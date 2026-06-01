@@ -6,17 +6,9 @@
  * Shared engine for copy and move operations.
  *
  * Move strategy: copy-then-delete.
- *   Phase 1 — copy everything to destination (same as copy operation)
+ *   Phase 1 — copy everything to destination
  *   Phase 2 — only if phase 1 completed without abort: delete all sources
- *
- * This gives move the same transactional guarantee as copy:
- *   - On abort: destination copies are cleaned up (unless keepOnAbort),
- *     sources are untouched
- *   - On success: sources are deleted only after all copies are confirmed
- *
- * Same-volume renames are NOT used, sacrificing some speed for correctness.
- * The difference is only material for very large directory trees on the same
- * volume, which is an acceptable tradeoff.
+ *   On abort: destination copies cleaned up, sources untouched.
  */
 
 const nodePath = require('path');
@@ -88,7 +80,18 @@ async function copyFile(src, dst, size, onBytes) {
 
 // ─── Recursive directory copy ─────────────────────────────────────────────────
 
-async function copyDir(src, dst, opts, onBytes, copiedPaths) {
+/**
+ * @param {object} opts
+ * @param {string}   opts.conflictFiles
+ * @param {string}   opts.conflictFolders
+ * @param {boolean}  opts.showHidden
+ * @param {Function} opts.isCancelled
+ * @param {boolean}  opts.abortSignal    — set to true internally on abort
+ * @param {string}   opts.abortReason
+ * @param {Function} opts.onBytesCopied  — (bytesDelta) called for each chunk
+ * @param {string[]} copiedPaths         — accumulates dst paths for cleanup
+ */
+async function copyDir(src, dst, opts, copiedPaths) {
   const stats = { copied:0, prefixed:0, replacedOlder:0, skippedNewer:0, skippedSecurity:0 };
   await fsp.mkdir(dst, { recursive: true });
 
@@ -118,7 +121,7 @@ async function copyDir(src, dst, opts, onBytes, copiedPaths) {
         effectiveDst = await resolvePrefixedName(srcChild, dst);
         stats.prefixed++;
       }
-      const sub = await copyDir(srcChild, effectiveDst, opts, onBytes, copiedPaths);
+      const sub = await copyDir(srcChild, effectiveDst, opts, copiedPaths);
       stats.copied         += sub.copied;
       stats.prefixed       += sub.prefixed;
       stats.replacedOlder  += sub.replacedOlder;
@@ -142,7 +145,9 @@ async function copyDir(src, dst, opts, onBytes, copiedPaths) {
           const prefixedDst = await resolvePrefixedName(srcChild, dst);
           try {
             const size = (await provider.stat(srcChild))?.size || 0;
-            await copyFile(srcChild, prefixedDst, size, onBytes);
+            await copyFile(srcChild, prefixedDst, size, bytes => {
+              if (opts.onBytesCopied) opts.onBytesCopied(bytes);
+            });
             copiedPaths.push(prefixedDst);
             stats.prefixed++;
           } catch (_) { stats.skippedSecurity++; }
@@ -152,7 +157,11 @@ async function copyDir(src, dst, opts, onBytes, copiedPaths) {
       }
       try {
         const size = (await provider.stat(srcChild))?.size || 0;
-        await copyFile(srcChild, dstChild, size, onBytes);
+        let lastBytes = 0;
+        await copyFile(srcChild, dstChild, size, bytes => {
+          if (opts.onBytesCopied) opts.onBytesCopied(bytes - lastBytes);
+          lastBytes = bytes;
+        });
         copiedPaths.push(dstChild);
         if (!dstExists) stats.copied++;
       } catch (_) { stats.skippedSecurity++; }
@@ -173,16 +182,6 @@ async function removeAll(paths, progressLabel, ctx) {
 
 // ─── Main engine ──────────────────────────────────────────────────────────────
 
-/**
- * Run a copy or move operation.
- *
- * For moves: copies everything first, then deletes sources only if the full
- * copy phase completed without abort. On abort, sources are never touched.
- *
- * @param {object}  ctx     — task context (progress, isCancelled, fail, done)
- * @param {object}  config  — task config
- * @param {boolean} isMove  — true = delete sources after successful copy
- */
 async function runCopyMove(ctx, config, isMove) {
   const {
     sources,
@@ -226,7 +225,7 @@ async function runCopyMove(ctx, config, isMove) {
       return ctx.fail(`Cannot ${isMove ? 'move' : 'copy'} "${nodePath.basename(src)}" into itself`);
   }
 
-  // ── Phase 1: scan sizes ───────────────────────────────────────────────────
+  // ── Phase 1: scan total size (enables accurate progress + ETA) ───────────
   ctx.progress(3, 'Scanning…', {});
   const sizes = [];
   for (const src of sources) {
@@ -234,18 +233,20 @@ async function runCopyMove(ctx, config, isMove) {
     sizes.push(await scanSize(src, showHidden));
   }
 
-  const totalKb   = Math.max(1, Math.round(sizes.reduce((a, b) => a + b, 0) / 1024));
-  const startTime = Date.now();
-  let   doneBytes = 0;
-  let   doneKb    = 0;
-  const copiedPaths   = [];  // destination paths created — cleaned up on abort
-  const sourcesToDelete = []; // source paths to delete after successful copy (move only)
+  const totalBytes = Math.max(1, sizes.reduce((a, b) => a + b, 0));
+  const totalKb    = Math.round(totalBytes / 1024);
+  const startTime  = Date.now();
+  let   doneBytes  = 0;
+  const copiedPaths    = [];
+  const sourcesToDelete = [];
 
+  // Shared progress emitter — called by both top-level and recursive copies
   function pushProgress(pct, itemIndex, itemName) {
+    const doneKb     = Math.round(doneBytes / 1024);
     const elapsedSec = (Date.now() - startTime) / 1000 || 0.001;
     const speedKbps  = Math.round(doneKb / elapsedSec);
-    const remaining  = totalKb - doneKb;
-    const etaSec     = speedKbps > 0 ? Math.round(remaining / speedKbps) : null;
+    const remainingKb = Math.max(0, totalKb - doneKb);
+    const etaSec     = speedKbps > 0 ? Math.round(remainingKb / speedKbps) : null;
     ctx.progress(pct, `${verb} "${itemName}"…`, {
       itemIndex, itemCount: sources.length, itemName,
       kbDone: doneKb, kbTotal: totalKb, speedKbps, etaSec,
@@ -269,7 +270,9 @@ async function runCopyMove(ctx, config, isMove) {
 
     if (!srcStat || (srcStat.hidden && !showHidden)) continue;
 
-    pushProgress(Math.round(5 + (i / sources.length) * 85), i, srcName);
+    // Emit initial progress for this item
+    const baseBytes = sizes.slice(0, i).reduce((a, b) => a + b, 0);
+    pushProgress(Math.round(5 + (doneBytes / totalBytes) * 85), i, srcName);
 
     if (srcStat.type === 'dir') {
       // ── Directory ──────────────────────────────────────────────────────────
@@ -296,12 +299,19 @@ async function runCopyMove(ctx, config, isMove) {
 
       const opts = {
         conflictFiles, conflictFolders, showHidden,
-        isCancelled: () => ctx.isCancelled(),
-        abortSignal: false, abortReason: '',
+        isCancelled:   () => ctx.isCancelled(),
+        abortSignal:   false,
+        abortReason:   '',
+        // Recursive byte callback: accumulate into doneBytes and push progress
+        onBytesCopied: (delta) => {
+          doneBytes += delta;
+          const pct = Math.round(5 + (doneBytes / totalBytes) * 85);
+          pushProgress(pct, i, srcName);
+        },
       };
 
       try {
-        const sub = await copyDir(src, effectiveDst, opts, () => {}, copiedPaths);
+        const sub = await copyDir(src, effectiveDst, opts, copiedPaths);
         if (opts.abortSignal) {
           totalStats.aborted = 1; totalStats.abortReason = opts.abortReason;
           aborted = true; break;
@@ -313,8 +323,8 @@ async function runCopyMove(ctx, config, isMove) {
         totalStats.skippedSecurity+= sub.skippedSecurity;
         copiedPaths.push(effectiveDst);
         if (isMove) sourcesToDelete.push(src);
-        doneBytes += sizes[i];
-        doneKb = Math.round(doneBytes / 1024);
+        // Ensure doneBytes reflects full item size after dir copy
+        doneBytes = baseBytes + sizes[i];
       } catch (e) { errors.push(`${srcName}: ${e.message}`); }
 
     } else {
@@ -330,8 +340,7 @@ async function runCopyMove(ctx, config, isMove) {
         if (conflictFiles === 'replaceOlder') {
           if (srcStat.mtime <= dstExists.mtime) {
             totalStats.skippedNewer++;
-            doneBytes += sizes[i]; doneKb = Math.round(doneBytes / 1024);
-            continue;
+            doneBytes += sizes[i]; continue;
           }
           totalStats.replacedOlder++;
         }
@@ -345,17 +354,18 @@ async function runCopyMove(ctx, config, isMove) {
         totalStats.copied++;
       }
 
+      let lastBytes = 0;
       try {
-        await copyFile(src, effectiveDst, sizes[i], (bd, bt) => {
-          doneBytes = sizes.slice(0, i).reduce((a, b) => a + b, 0) + bd;
-          doneKb = Math.round(doneBytes / 1024);
-          const pct = Math.round(5 + ((i + bd / Math.max(1, bt)) / sources.length) * 85);
+        await copyFile(src, effectiveDst, sizes[i], (bd) => {
+          doneBytes += bd - lastBytes;
+          lastBytes  = bd;
+          const pct  = Math.round(5 + (doneBytes / totalBytes) * 85);
           pushProgress(pct, i, srcName);
         });
         copiedPaths.push(effectiveDst);
         if (isMove) sourcesToDelete.push(src);
-        doneBytes = sizes.slice(0, i + 1).reduce((a, b) => a + b, 0);
-        doneKb = Math.round(doneBytes / 1024);
+        // Snap doneBytes to exact item boundary
+        doneBytes = baseBytes + sizes[i];
       } catch (e) {
         errors.push(`${srcName}: ${e.message}`);
         if (!dstExists) totalStats.copied = Math.max(0, totalStats.copied - 1);
@@ -368,7 +378,7 @@ async function runCopyMove(ctx, config, isMove) {
     await removeAll(copiedPaths, 'Reverting…', ctx);
   }
 
-  // ── Phase 3b: delete sources (move only, copy phase must have completed) ──
+  // ── Phase 3b: delete sources (move, success only) ─────────────────────────
   if (isMove && !aborted && sourcesToDelete.length > 0) {
     await removeAll(sourcesToDelete, 'Removing originals…', ctx);
   }

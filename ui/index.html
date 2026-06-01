@@ -361,6 +361,9 @@
     }
     .entry:hover { background: var(--entry-hover); }
     .entry.selected { background: var(--sel-bg); }
+    /* Selection indicated by background only — no text color change,
+       which would conflict with folder blue and cause confusion */
+    .entry.selected .entry-name { color: inherit; }
     .entry-icon {
       width: 16px; flex-shrink: 0;
       font-size: 11px; text-align: center;
@@ -384,8 +387,7 @@
       font-family: var(--font-mono); font-size: 11px;
       color: var(--text3); flex-shrink: 0;
     }
-    .entry.selected .entry-size,
-    .entry.selected .entry-mtime { color: var(--sel-text); opacity: .75; }
+    /* size/mtime retain their muted color when selected */
 
     /* Panel status */
     .panel-status {
@@ -532,12 +534,16 @@
       padding: 10px 18px 14px; border-top: 1px solid var(--border);
       display: flex; align-items: center; gap: 8px;
     }
+    /* "Show report" takes all remaining space, pushing Abort+keep+OK right */
+    #copy-report-row { flex: 1; }
+    /* Abort btn + keep checkbox form a tight group; keep hidden until progress */
+    #copy-keep-row { display: none; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text2); cursor: pointer; }
     .copy-check-row {
       display: flex; align-items: center; gap: 6px;
-      font-size: 12px; color: var(--text2); cursor: pointer; flex: 1;
+      font-size: 12px; color: var(--text2); cursor: pointer;
     }
     .copy-check-row input[type=checkbox] { accent-color: var(--accent); }
-    #copy-keep-row { display: none; }
     .copy-btn {
       height: 28px; padding: 0 16px; border-radius: var(--radius);
       border: 1px solid var(--border); background: var(--bg3); color: var(--text);
@@ -648,18 +654,18 @@
         <div id="copy-configure-wrap">
           <div class="copy-conflict-row">
             <fieldset class="copy-conflict-group">
-              <legend>If files clash</legend>
-              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="abort" />      <span>Abort</span></label>
-              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="replaceOlder"/><span>Replace older</span></label>
-              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="replaceAll"/>  <span>Replace all</span></label>
-              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="prefix"/>      <span>Keep both (add prefix)</span></label>
-            </fieldset>
-            <fieldset class="copy-conflict-group">
-              <legend>If folders clash</legend>
+              <legend>📁 If folders clash</legend>
               <label class="copy-radio-row"><input type="radio" name="conflictFolders" value="abort"/>  <span>Abort</span></label>
               <label class="copy-radio-row"><input type="radio" name="conflictFolders" value="merge"/>  <span>Merge</span></label>
               <label class="copy-radio-row"><input type="radio" name="conflictFolders" value="replace"/><span>Replace</span></label>
               <label class="copy-radio-row"><input type="radio" name="conflictFolders" value="prefix"/> <span>Keep both (add prefix)</span></label>
+            </fieldset>
+            <fieldset class="copy-conflict-group">
+              <legend>📄 If files clash</legend>
+              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="abort" />      <span>Abort</span></label>
+              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="replaceOlder"/><span>Replace older</span></label>
+              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="replaceAll"/>  <span>Replace</span></label>
+              <label class="copy-radio-row"><input type="radio" name="conflictFiles" value="prefix"/>      <span>Keep both (add prefix)</span></label>
             </fieldset>
           </div>
         </div>
@@ -680,10 +686,10 @@
         <label class="copy-check-row" id="copy-report-row">
           <input type="checkbox" id="copy-show-report" /> Show report when done
         </label>
+        <button class="copy-btn" id="copy-cancel-btn">Cancel</button>
         <label class="copy-check-row" id="copy-keep-row">
           <input type="checkbox" id="copy-keep-on-abort" /> Keep copied files
         </label>
-        <button class="copy-btn" id="copy-cancel-btn">Cancel</button>
         <button class="copy-btn primary" id="copy-ok-btn">Copy</button>
       </div>
     </div>

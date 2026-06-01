@@ -64,7 +64,7 @@ function makeCtx(config) {
 
   const ctx = {
     config,
-    progress(pct, msg) { progressLog.push({ pct, msg }); },
+    progress(pct, msg, extra) { progressLog.push({ pct, msg, extra }); },
     done(result)       { _resolve({ ok: true, result, progressLog }); },
     fail(msg)          { _resolve({ ok: false, error: msg, progressLog }); },
     isCancelled()      { return cancelled; },
@@ -363,6 +363,117 @@ describe('copy task', () => {
     assert.ok(result.left  && result.left.panel  === 'left');
     assert.ok(result.right && result.right.panel === 'right');
   });
+
+  test('replaceOlder: skips destination-newer file', async () => {
+    const src = path.join(srcDir, 'old.txt');
+    const dst2 = path.join(dstDir, 'old.txt');
+    await mkfile(src, 'src content');
+    await mkfile(dst2, 'dst content');
+    // Make dst newer by setting its mtime 10s in the future
+    const future = new Date(Date.now() + 10000);
+    await fsp.utimes(dst2, future, future);
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [src], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'replaceOlder',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.stats.skippedNewer, 1);
+    // dst content should be unchanged
+    assert.equal(fs.readFileSync(dst2, 'utf8'), 'dst content');
+  });
+
+  test('replaceOlder: replaces destination-older file', async () => {
+    const src = path.join(srcDir, 'new.txt');
+    const dst2 = path.join(dstDir, 'new.txt');
+    await mkfile(src, 'new content');
+    await mkfile(dst2, 'old content');
+    // Make dst older by setting its mtime 10s in the past
+    const past = new Date(Date.now() - 10000);
+    await fsp.utimes(dst2, past, past);
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [src], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'replaceOlder',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.stats.replacedOlder, 1);
+    assert.equal(fs.readFileSync(dst2, 'utf8'), 'new content');
+  });
+
+  test('abort: cleans up destination copies when keepOnAbort=false', async () => {
+    const src1 = path.join(srcDir, 'a.txt');
+    const src2 = path.join(srcDir, 'b.txt');
+    const clash = path.join(dstDir, 'b.txt');
+    await mkfile(src1, 'aaa');
+    await mkfile(src2, 'bbb');
+    await mkfile(clash, 'existing');  // causes abort on second item
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [src1, src2], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'abort', keepOnAbort: false,
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok); // task succeeds, just reports abort
+    assert.ok(result.aborted);
+    // a.txt was copied before abort — should be cleaned up
+    assert.ok(!fs.existsSync(path.join(dstDir, 'a.txt')), 'cleanup should remove partial copy');
+  });
+
+  test('abort: keeps destination copies when keepOnAbort=true', async () => {
+    const src1 = path.join(srcDir, 'keep-a.txt');
+    const src2 = path.join(srcDir, 'keep-b.txt');
+    const clash = path.join(dstDir, 'keep-b.txt');
+    await mkfile(src1, 'aaa');
+    await mkfile(src2, 'bbb');
+    await mkfile(clash, 'existing');
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [src1, src2], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'abort', keepOnAbort: true,
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.ok(result.aborted);
+    // a.txt was copied before abort — should be kept
+    assert.ok(fs.existsSync(path.join(dstDir, 'keep-a.txt')), 'keepOnAbort should preserve copy');
+  });
+
+  test('hidden files excluded when showHidden=false', async () => {
+    await mkfile(path.join(srcDir, '.hidden'), 'h');
+    await mkfile(path.join(srcDir, 'visible.txt'), 'v');
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [path.join(srcDir, '.hidden'), path.join(srcDir, 'visible.txt')],
+      dst: dstDir, panel: 'left', dstPanel: 'right', showHidden: false,
+    });
+    task.start(ctx);
+    await promise;
+    assert.ok(!fs.existsSync(path.join(dstDir, '.hidden')));
+    assert.ok(fs.existsSync(path.join(dstDir, 'visible.txt')));
+  });
+
+  test('recursive directory copy reports progress at each file', async () => {
+    const subDir = path.join(srcDir, 'tree');
+    await fsp.mkdir(path.join(subDir, 'sub'), { recursive: true });
+    await mkfile(path.join(subDir, 'root.txt'), 'x'.repeat(8192));
+    await mkfile(path.join(subDir, 'sub', 'deep.txt'), 'y'.repeat(8192));
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [subDir], dst: dstDir, panel: 'left', dstPanel: 'right',
+    });
+    task.start(ctx);
+    const { progressLog } = await promise;
+    // Should have multiple progress calls with increasing kbDone
+    const withKb = progressLog.filter(p => p.extra && p.extra.kbDone > 0);
+    assert.ok(withKb.length > 1, 'should report progress for files inside subdirs');
+  });
 });
 
 // ─── move task ────────────────────────────────────────────────────────────────
@@ -431,6 +542,56 @@ describe('move task', () => {
     const { result } = await promise;
     assert.ok(result.left  && result.left.panel  === 'left');
     assert.ok(result.right && result.right.panel === 'right');
+  });
+
+  test('source is deleted after successful move (phase 3b)', async () => {
+    const src = path.join(srcDir, 'phase3.txt');
+    await mkfile(src, 'delete me');
+    const task = require('../worker/tasks/move');
+    const { ctx, promise } = makeCtx({
+      sources: [src], dst: dstDir, panel: 'left', dstPanel: 'right',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(ok);
+    assert.ok(!fs.existsSync(src), 'source should be deleted after move');
+    assert.ok(fs.existsSync(path.join(dstDir, 'phase3.txt')));
+  });
+
+  test('source untouched when move is aborted', async () => {
+    const src1 = path.join(srcDir, 'safe1.txt');
+    const src2 = path.join(srcDir, 'safe2.txt');
+    const clash = path.join(dstDir, 'safe2.txt');
+    await mkfile(src1, 'aaa');
+    await mkfile(src2, 'bbb');
+    await mkfile(clash, 'existing');
+    const task = require('../worker/tasks/move');
+    const { ctx, promise } = makeCtx({
+      sources: [src1, src2], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'abort', keepOnAbort: false,
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.ok(result.aborted);
+    // Both sources must still exist — phase 3b never runs on abort
+    assert.ok(fs.existsSync(src1), 'source 1 should be untouched after abort');
+    assert.ok(fs.existsSync(src2), 'source 2 should be untouched after abort');
+  });
+
+  test('move directory: source dir deleted after success', async () => {
+    const srcD = path.join(srcDir, 'movedir');
+    await fsp.mkdir(srcD, { recursive: true });
+    await mkfile(path.join(srcD, 'file.txt'), 'content');
+    const task = require('../worker/tasks/move');
+    const { ctx, promise } = makeCtx({
+      sources: [srcD], dst: dstDir, panel: 'left', dstPanel: 'right',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(ok);
+    assert.ok(!fs.existsSync(srcD), 'source dir should be deleted after move');
+    assert.ok(fs.existsSync(path.join(dstDir, 'movedir', 'file.txt')));
   });
 });
 
