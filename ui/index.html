@@ -525,6 +525,17 @@
       font-family: var(--font-mono); font-size: 10px;
       color: var(--text3);
     }
+    #mkdir-error-phase { display: none; }
+    #mkdir-error-phase.visible { display: block; }
+    #mkdir-error-msg {
+      font-size: 12px; color: var(--text2);
+      margin-bottom: 16px; line-height: 1.5;
+    }
+    #mkdir-error-msg .msg-tip {
+      color: var(--text3); font-size: 11px; margin-top: 8px;
+    }
+    #mkdir-configure-phase { display: block; }
+    #mkdir-configure-phase.hidden { display: none; }
     #mkdir-footer {
       display: flex; justify-content: flex-end; gap: 8px;
     }
@@ -698,15 +709,25 @@
   <div id="mkdir-dialog-bg">
     <div id="mkdir-dialog">
       <div id="mkdir-dialog-title">New Folder</div>
-      <div id="mkdir-dialog-sub"></div>
-      <input id="mkdir-input" type="text" placeholder="Folder name" autocomplete="off" spellcheck="false" />
-      <label id="mkdir-subdirs-row">
-        <input type="checkbox" id="mkdir-subdirs" />
-        Create sub-directories
-      </label>
-      <div id="mkdir-subdirs-hint">
-        Separate nested folder names with <code>/</code>, e.g. <code>parent/child/grandchild</code>
+
+      <!-- Phase: configure -->
+      <div id="mkdir-configure-phase">
+        <div id="mkdir-dialog-sub"></div>
+        <input id="mkdir-input" type="text" placeholder="Folder name" autocomplete="off" spellcheck="false" />
+        <label id="mkdir-subdirs-row">
+          <input type="checkbox" id="mkdir-subdirs" />
+          Create sub-directories
+        </label>
+        <div id="mkdir-subdirs-hint">
+          Separate nested folder names with <code>/</code>, e.g. <code>parent/child/grandchild</code>
+        </div>
       </div>
+
+      <!-- Phase: error -->
+      <div id="mkdir-error-phase">
+        <div id="mkdir-error-msg"></div>
+      </div>
+
       <div id="mkdir-footer">
         <button class="copy-btn" id="mkdir-cancel">Cancel</button>
         <button class="copy-btn primary" id="mkdir-create">Create</button>

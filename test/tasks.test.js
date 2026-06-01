@@ -141,6 +141,19 @@ describe('mkdir task', () => {
     assert.ok(result.created.endsWith('gamma'));
   });
 
+  test('subDirs mode: duplicate full path is rejected', async () => {
+    const task = require('../worker/tasks/mkdir');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'dup/path', subDirs: true });
+    task.start(ctx);
+    await promise; // create it first
+    purgeCache('worker/tasks');
+    const { ctx: ctx2, promise: p2 } = makeCtx({ panel: 'left', name: 'dup/path', subDirs: true });
+    require('../worker/tasks/mkdir').start(ctx2);
+    const { ok, error } = await p2;
+    assert.ok(!ok, 'should fail on duplicate full path');
+    assert.match(error, /already exists/i);
+  });
+
   test('subDirs mode: existing intermediate directory is silently accepted', async () => {
     await fsp.mkdir(path.join(workDir, 'existing-inter'));
     const task = require('../worker/tasks/mkdir');

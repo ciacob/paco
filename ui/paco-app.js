@@ -146,6 +146,13 @@
         _copyDlgDone(result);
       }
 
+      // Mkdir dialog completion
+      if (mkdirDlg._resultResolve) {
+        const resolve = mkdirDlg._resultResolve;
+        mkdirDlg._resultResolve = null;
+        resolve({ ok: true });
+      }
+
       // ── Boot sequencing ────────────────────────────────────────────────
       const bootAction = S.nextBootAction(appState.bootPhase, ws);
       appState = { ...appState, bootPhase: S.advanceBootPhase(appState.bootPhase, bootAction.action) };
@@ -161,13 +168,26 @@
     if (s === 'error') {
       appState = { ...appState, busy: false };
       dom.busyBar.classList.remove('visible');
-      // State-machine violations (e.g. reset-from-idle) are not user-visible errors
-      // and must NOT trigger another reset — that would cause an infinite loop.
       const errMsg = ws.message || '';
       const isStateMachineViolation = /Cannot \w+ from state/.test(errMsg);
       if (!isStateMachineViolation) {
-        showError('Error', errMsg || 'Unknown error');
-        adapter.reset().catch(() => {});
+        // task-shell sends EVT.STATUS_UPDATE then EVT.TASK_ERROR for the same
+        // error, producing two identical WS pushes. Only handle the first one.
+        if (errMsg && errMsg === appState._lastErrorMsg) {
+          // duplicate — ignore, but still reset
+          appState = { ...appState, _lastErrorMsg: null };
+          adapter.reset().catch(() => {});
+        } else {
+          appState = { ...appState, _lastErrorMsg: errMsg };
+          if (mkdirDlg._resultResolve) {
+            const resolve = mkdirDlg._resultResolve;
+            mkdirDlg._resultResolve = null;
+            resolve({ ok: false, error: errMsg || 'Unknown error' });
+          } else {
+            showError('Error', errMsg || 'Unknown error');
+          }
+          adapter.reset().catch(() => {});
+        }
       }
     }
 
@@ -310,15 +330,7 @@
     el.innerHTML = '';
     const sel = selSets[side];
 
-    if (!p.entries || p.entries.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'list-empty';
-      empty.textContent = p.path ? 'Empty folder' : 'Loading…';
-      el.appendChild(empty);
-      return;
-    }
-
-    // ".." row
+    // ".." row — always shown so navigation is never broken, even in empty folders
     const dotdot = document.createElement('div');
     dotdot.className = 'entry';
     dotdot.innerHTML = `<span class="entry-icon">📁</span><span class="entry-name is-dir">..</span><span class="entry-size"></span><span class="entry-mtime"></span>`;
@@ -328,6 +340,14 @@
     });
     dotdot.addEventListener('click', () => setActivePanel(side));
     el.appendChild(dotdot);
+
+    if (!p.entries || p.entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'list-empty';
+      empty.textContent = p.path ? 'Empty folder' : 'Loading…';
+      el.appendChild(empty);
+      return;
+    }
 
     p.entries.forEach(entry => {
       const row = document.createElement('div');
@@ -487,28 +507,44 @@
     }
   }
 
-  // ─── Mkdir dialog ────────────────────────────────────────────────────────────
+  // ─── Mkdir dialog (two phases: configure → error) ──────────────────────────────────
 
   const mkdirDlg = {
-    bg:         document.getElementById('mkdir-dialog-bg'),
-    sub:        document.getElementById('mkdir-dialog-sub'),
-    input:      document.getElementById('mkdir-input'),
-    subdirs:    document.getElementById('mkdir-subdirs'),
-    hint:       document.getElementById('mkdir-subdirs-hint'),
-    cancelBtn:  document.getElementById('mkdir-cancel'),
-    createBtn:  document.getElementById('mkdir-create'),
+    bg:          document.getElementById('mkdir-dialog-bg'),
+    title:       document.getElementById('mkdir-dialog-title'),
+    sub:         document.getElementById('mkdir-dialog-sub'),
+    input:       document.getElementById('mkdir-input'),
+    subdirs:     document.getElementById('mkdir-subdirs'),
+    hint:        document.getElementById('mkdir-subdirs-hint'),
+    configPhase: document.getElementById('mkdir-configure-phase'),
+    errorPhase:  document.getElementById('mkdir-error-phase'),
+    errorMsg:    document.getElementById('mkdir-error-msg'),
+    cancelBtn:   document.getElementById('mkdir-cancel'),
+    createBtn:   document.getElementById('mkdir-create'),
   };
 
-  // Toggle hint visibility when checkbox changes
+  function _mkdirPhase(phase) {
+    const isConfigure = phase === 'configure';
+    mkdirDlg.configPhase.classList.toggle('hidden', !isConfigure);
+    mkdirDlg.errorPhase.classList.toggle('visible',  !isConfigure);
+    if (isConfigure) {
+      mkdirDlg.title.textContent      = 'New Folder';
+      mkdirDlg.cancelBtn.textContent  = 'Cancel';
+      mkdirDlg.createBtn.style.display = '';
+    } else {
+      mkdirDlg.title.textContent      = 'New Folder';
+      mkdirDlg.cancelBtn.textContent  = 'Close';
+      mkdirDlg.createBtn.style.display = 'none';
+    }
+  }
+
   mkdirDlg.subdirs.addEventListener('change', () => {
     mkdirDlg.hint.classList.toggle('visible', mkdirDlg.subdirs.checked);
-    // Persist preference
     appState = { ...appState, config: { ...appState.config, mkdirSubDirs: mkdirDlg.subdirs.checked } };
   });
 
-  // Submit on Enter
   mkdirDlg.input.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); mkdirDlg.createBtn.click(); }
+    if (e.key === 'Enter')  { e.preventDefault(); mkdirDlg.createBtn.click(); }
     if (e.key === 'Escape') { e.preventDefault(); mkdirDlg.cancelBtn.click(); }
   });
 
@@ -516,41 +552,59 @@
     if (appState.busy) return;
     const side = appState.activePanel;
 
-    // Pre-populate from persisted config
+    // ── Configure phase ──────────────────────────────────────────────────────────────
     mkdirDlg.subdirs.checked = !!appState.config.mkdirSubDirs;
     mkdirDlg.hint.classList.toggle('visible', mkdirDlg.subdirs.checked);
     mkdirDlg.sub.textContent = appState.panels[side].path;
-    mkdirDlg.input.value = '';
+    mkdirDlg.input.value     = '';
+    _mkdirPhase('configure');
     mkdirDlg.bg.classList.add('visible');
-
-    // Focus after paint
     setTimeout(() => mkdirDlg.input.focus(), 30);
 
     const name = await new Promise(resolve => {
-      const onCancel = () => {
-        cleanup();
-        resolve(null);
-      };
-      const onCreate = () => {
-        cleanup();
-        resolve(mkdirDlg.input.value.trim());
-      };
+      const onCancel = () => { cleanup(); resolve(null); };
+      const onCreate = () => { cleanup(); resolve(mkdirDlg.input.value.trim()); };
       function cleanup() {
         mkdirDlg.cancelBtn.removeEventListener('click', onCancel);
         mkdirDlg.createBtn.removeEventListener('click', onCreate);
-        mkdirDlg.bg.classList.remove('visible');
       }
       mkdirDlg.cancelBtn.addEventListener('click', onCancel);
       mkdirDlg.createBtn.addEventListener('click', onCreate);
     });
 
-    if (!name) return;
+    if (!name) { mkdirDlg.bg.classList.remove('visible'); return; }
 
+    // ── Task ───────────────────────────────────────────────────────────────────
     adapter.assign('worker/tasks/mkdir.js', {
-      panel:   side,
-      name,
-      subDirs: mkdirDlg.subdirs.checked,
-    }).catch(err => showError('New Folder failed', err.message));
+      panel: side, name, subDirs: mkdirDlg.subdirs.checked,
+    }).catch(err => {
+      if (mkdirDlg._resultResolve) {
+        const r = mkdirDlg._resultResolve; mkdirDlg._resultResolve = null;
+        r({ ok: false, error: err.message });
+      }
+    });
+
+    const result = await new Promise(resolve => { mkdirDlg._resultResolve = resolve; });
+
+    if (result.ok) { mkdirDlg.bg.classList.remove('visible'); return; }
+
+    // ── Error phase ────────────────────────────────────────────────────────────
+    const parts = (result.error || 'Unknown error').split('\n\n');
+    mkdirDlg.errorMsg.innerHTML = '';
+    parts.forEach((p, i) => {
+      const el = document.createElement('p');
+      el.textContent = p;
+      if (i > 0) el.className = 'msg-tip';
+      mkdirDlg.errorMsg.appendChild(el);
+    });
+    _mkdirPhase('error');
+
+    // Close dismisses — dialog closes cleanly, no re-open
+    await new Promise(resolve => {
+      const onClose = () => { mkdirDlg.cancelBtn.removeEventListener('click', onClose); resolve(); };
+      mkdirDlg.cancelBtn.addEventListener('click', onClose);
+    });
+    mkdirDlg.bg.classList.remove('visible');
   }
 
   // ─── Copy dialog (three-phase) ───────────────────────────────────────────────

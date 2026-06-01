@@ -63,6 +63,10 @@ module.exports = {
       return ctx.fail('Panel has no current path — navigate to a directory first');
     }
 
+    // Persist the subDirs preference for next time
+    const context = require('../../paco/context');
+    context.updateConfig({ mkdirSubDirs: !!subDirs });
+
     if (subDirs) {
       // Validate each segment individually for bad characters
       const segments = trimmed.split(/[/\\]/).filter(s => s.length > 0);
@@ -99,18 +103,16 @@ module.exports = {
     // Join the full relative path — works for both single and multi-segment
     const newDirPath = nodePath.join(panelPath, ...trimmed.split(/[/\\]/).filter(Boolean));
 
-    // In single-folder mode, check for a pre-existing entry first so we can
-    // give a friendlier message than EEXIST from the OS.
-    if (!subDirs) {
-      const existing = await provider.stat(newDirPath);
-      if (existing) {
-        const kind = existing.type === 'dir' ? 'Folder' : 'File';
-        return ctx.fail(`${kind} \u201c${trimmed}\u201d already exists`);
-      }
+    // Check the leaf (deepest) path — existing intermediates are fine in
+    // subDirs mode, but we never silently accept the final destination.
+    const leafExists = await provider.stat(newDirPath);
+    if (leafExists) {
+      const kind = leafExists.type === 'dir' ? 'Folder' : 'File';
+      return ctx.fail(`${kind} “${trimmed}” already exists`);
     }
 
     try {
-      // recursive: true means existing intermediate dirs are silently accepted
+      // recursive: true silently skips existing intermediate dirs in subDirs mode
       await provider.mkdir(newDirPath);
     } catch (err) {
       return ctx.fail(humaniseError(err, newDirPath));
