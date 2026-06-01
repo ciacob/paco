@@ -158,6 +158,7 @@
       appState = { ...appState, bootPhase: S.advanceBootPhase(appState.bootPhase, bootAction.action) };
 
       if (bootAction.action === 'navigate-right') {
+        // reset then navigate — single reset, early return skips the one below
         adapter.reset().then(() => navigate('right', '')).catch(() => {});
         return;
       }
@@ -532,7 +533,7 @@
       mkdirDlg.cancelBtn.textContent  = 'Cancel';
       mkdirDlg.createBtn.style.display = '';
     } else {
-      mkdirDlg.title.textContent      = 'New Folder';
+      mkdirDlg.title.textContent      = 'Error';
       mkdirDlg.cancelBtn.textContent  = 'Close';
       mkdirDlg.createBtn.style.display = 'none';
     }

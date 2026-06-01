@@ -140,11 +140,22 @@ function spawnWorker() {
         updateState({ state: STATE.DONE, message: 'Task completed', percent: 100, result: envelope.payload?.result ?? null });
         break;
 
-      case EVT.TASK_ERROR:
-        log('worker', 'ERROR:', envelope.payload?.message);
+      case EVT.TASK_ERROR: {
+        const errMsg = envelope.payload?.message || '';
+        log('worker', 'ERROR:', errMsg);
         if (envelope.payload?.stack) log('worker', envelope.payload.stack);
-        updateState({ state: STATE.ERROR, message: envelope.payload?.message, result: null });
+        // State-machine violations (reset/pause/resume from wrong state) are
+        // transient noise. Don't persist them in latestWorkerState — push once
+        // for the client to see, then immediately restore the previous state.
+        const isViolation = /Cannot \w+ from state/.test(errMsg);
+        updateState({ state: STATE.ERROR, message: errMsg, result: null });
+        if (isViolation) {
+          // Restore immediately so latestWorkerState doesn't get stuck as error
+          updateState({ state: workerState.state === STATE.ERROR ? STATE.IDLE : workerState.state,
+                        message: null, result: null });
+        }
         break;
+      }
 
       default:
         log('worker', 'unknown event type:', envelope.type);
