@@ -476,19 +476,70 @@
     }
   }
 
+  // ─── Mkdir dialog ────────────────────────────────────────────────────────────
+
+  const mkdirDlg = {
+    bg:         document.getElementById('mkdir-dialog-bg'),
+    sub:        document.getElementById('mkdir-dialog-sub'),
+    input:      document.getElementById('mkdir-input'),
+    subdirs:    document.getElementById('mkdir-subdirs'),
+    hint:       document.getElementById('mkdir-subdirs-hint'),
+    cancelBtn:  document.getElementById('mkdir-cancel'),
+    createBtn:  document.getElementById('mkdir-create'),
+  };
+
+  // Toggle hint visibility when checkbox changes
+  mkdirDlg.subdirs.addEventListener('change', () => {
+    mkdirDlg.hint.classList.toggle('visible', mkdirDlg.subdirs.checked);
+    // Persist preference
+    appState = { ...appState, config: { ...appState.config, mkdirSubDirs: mkdirDlg.subdirs.checked } };
+  });
+
+  // Submit on Enter
+  mkdirDlg.input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); mkdirDlg.createBtn.click(); }
+    if (e.key === 'Escape') { e.preventDefault(); mkdirDlg.cancelBtn.click(); }
+  });
+
   async function cmdMkdir() {
     if (appState.busy) return;
     const side = appState.activePanel;
-    const name = await showOverlay(
-      'New Folder',
-      `Create folder in:\n${appState.panels[side].path}`,
-      [{ label: 'Cancel', value: null }, { label: 'Create', cls: 'primary' }],
-      'New Folder'
-    );
-    // null = Cancel button; 'Cancel' = button label fallback; empty string = blank input
-    if (!name || name === 'Cancel') return;
-    adapter.assign('worker/tasks/mkdir.js', { panel: side, name })
-      .catch(err => showError('New Folder failed', err.message));
+
+    // Pre-populate from persisted config
+    mkdirDlg.subdirs.checked = !!appState.config.mkdirSubDirs;
+    mkdirDlg.hint.classList.toggle('visible', mkdirDlg.subdirs.checked);
+    mkdirDlg.sub.textContent = appState.panels[side].path;
+    mkdirDlg.input.value = '';
+    mkdirDlg.bg.classList.add('visible');
+
+    // Focus after paint
+    setTimeout(() => mkdirDlg.input.focus(), 30);
+
+    const name = await new Promise(resolve => {
+      const onCancel = () => {
+        cleanup();
+        resolve(null);
+      };
+      const onCreate = () => {
+        cleanup();
+        resolve(mkdirDlg.input.value.trim());
+      };
+      function cleanup() {
+        mkdirDlg.cancelBtn.removeEventListener('click', onCancel);
+        mkdirDlg.createBtn.removeEventListener('click', onCreate);
+        mkdirDlg.bg.classList.remove('visible');
+      }
+      mkdirDlg.cancelBtn.addEventListener('click', onCancel);
+      mkdirDlg.createBtn.addEventListener('click', onCreate);
+    });
+
+    if (!name) return;
+
+    adapter.assign('worker/tasks/mkdir.js', {
+      panel:   side,
+      name,
+      subDirs: mkdirDlg.subdirs.checked,
+    }).catch(err => showError('New Folder failed', err.message));
   }
 
   // ─── Copy dialog (three-phase) ───────────────────────────────────────────────

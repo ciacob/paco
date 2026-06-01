@@ -87,6 +87,9 @@ const DEFAULT_CONFIG = {
   copyShowReport:      true,
   copyKeepOnAbort:     false,
 
+  // New Folder dialog
+  mkdirSubDirs: false,  // if true, path separators create nested directories
+
   // Move dialog preferences (same strategy options as copy)
   moveConflictFiles:   'abort',
   moveConflictFolders: 'abort',

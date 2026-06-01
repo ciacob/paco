@@ -122,18 +122,48 @@ describe('mkdir task', () => {
     assert.match(error, /required/i);
   });
 
-  test('fails for name with path separator', async () => {
+  test('fails for name with path separator in single-folder mode', async () => {
     const task = require('../worker/tasks/mkdir');
-    const { ctx, promise } = makeCtx({ panel: 'left', name: 'a/b' });
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'a/b', subDirs: false });
     task.start(ctx);
     const { ok, error } = await promise;
     assert.ok(!ok);
     assert.match(error, /separator/i);
   });
 
+  test('creates nested dirs in subDirs mode', async () => {
+    const task = require('../worker/tasks/mkdir');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'alpha/beta/gamma', subDirs: true });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok, 'should succeed');
+    assert.ok(fs.existsSync(path.join(workDir, 'alpha', 'beta', 'gamma')));
+    assert.equal(result.segments.length, 3);
+  });
+
+  test('subDirs mode: stops on first existing segment', async () => {
+    await fsp.mkdir(path.join(workDir, 'existing'));
+    const task = require('../worker/tasks/mkdir');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'existing/child', subDirs: true });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /already exists/i);
+    // child should NOT have been created
+    assert.ok(!fs.existsSync(path.join(workDir, 'existing', 'child')));
+  });
+
+  test('subDirs mode: validates each segment', async () => {
+    const task = require('../worker/tasks/mkdir');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'good/bad<name>', subDirs: true });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(!ok);
+  });
+
   test('fails for invalid characters', async () => {
     const task = require('../worker/tasks/mkdir');
-    const { ctx, promise } = makeCtx({ panel: 'left', name: 'bad<name>' });
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'bad<name>', subDirs: false });
     task.start(ctx);
     const { ok, error } = await promise;
     assert.ok(!ok);
