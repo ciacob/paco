@@ -627,6 +627,11 @@
     okBtn:       document.getElementById('copy-ok-btn'),
   };
 
+  // Escape dismisses the copy/move dialog in any phase
+  copyDlg.bg.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); copyDlg.cancelBtn.click(); }
+  });
+
   // Wire cancel/abort/close button
   copyDlg.cancelBtn.addEventListener('click', () => {
     if (copyDlg._phase === 'progress') {
@@ -718,6 +723,7 @@
     // Show dialog in configure phase
     _copyDlgPhase('configure');
     copyDlg.bg.classList.add('visible');
+    setTimeout(() => copyDlg.bg.focus(), 30);
 
     // Wait for OK or Cancel
     const prefs = await new Promise(resolve => {
@@ -848,6 +854,7 @@
 
     _copyDlgPhase('configure');
     copyDlg.bg.classList.add('visible');
+    setTimeout(() => copyDlg.bg.focus(), 30);
 
     const prefs = await new Promise(resolve => {
       copyDlg._resolve = resolve;
