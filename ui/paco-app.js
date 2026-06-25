@@ -49,6 +49,7 @@
     fkView:     $('fk-view'),
     fkEdit:     $('fk-edit'),
     fkCopy:     $('fk-copy'),
+    fkRename:   $('fk-rename'),
     fkMove:     $('fk-move'),
     fkMkdir:    $('fk-mkdir'),
     fkDelete:   $('fk-delete'),
@@ -164,6 +165,13 @@
         resolve({ ok: true });
       }
 
+      // Rename dialog completion
+      if (renameDlg._resultResolve) {
+        const resolve = renameDlg._resultResolve;
+        renameDlg._resultResolve = null;
+        resolve({ ok: true });
+      }
+
       // Continue draining watch queue if more panels need refreshing
       if (appState._watchQueue && appState._watchQueue.length > 0) {
         adapter.reset().then(() => _drainWatchQueue()).catch(() => {});
@@ -200,6 +208,10 @@
           if (mkdirDlg._resultResolve) {
             const resolve = mkdirDlg._resultResolve;
             mkdirDlg._resultResolve = null;
+            resolve({ ok: false, error: errMsg || 'Unknown error' });
+          } else if (renameDlg._resultResolve) {
+            const resolve = renameDlg._resultResolve;
+            renameDlg._resultResolve = null;
             resolve({ ok: false, error: errMsg || 'Unknown error' });
           } else {
             showError('Error', errMsg || 'Unknown error');
@@ -445,13 +457,15 @@
 
   function renderFkeys() {
     const side    = appState.activePanel;
-    const enabled = S.fkeyEnabledState(selArray(side), appState.busy);
+    const sel     = selArray(side);
+    const enabled = S.fkeyEnabledState(sel, appState.busy);
     dom.fkView.disabled   = !enabled.view;
     dom.fkEdit.disabled   = !enabled.edit;
     dom.fkCopy.disabled   = !enabled.copy;
     dom.fkMove.disabled   = !enabled.move;
     dom.fkMkdir.disabled  = !enabled.mkdir;
     dom.fkDelete.disabled = !enabled.delete;
+    dom.fkRename.disabled = !S.canRename(sel, appState.panels[side].entries, appState.busy);
   }
 
   function setActivePanel(side) {
@@ -644,6 +658,130 @@
       mkdirDlg.cancelBtn.addEventListener('click', onClose);
     });
     mkdirDlg.bg.classList.remove('visible');
+  }
+
+  // ─── Rename dialog (two phases: configure → error) ──────────────────────────
+
+  const renameDlg = {
+    bg:          document.getElementById('rename-dialog-bg'),
+    title:       document.getElementById('rename-dialog-title'),
+    input:       document.getElementById('rename-input'),
+    configPhase: document.getElementById('rename-configure-phase'),
+    errorPhase:  document.getElementById('rename-error-phase'),
+    errorMsg:    document.getElementById('rename-error-msg'),
+    cancelBtn:   document.getElementById('rename-cancel'),
+    confirmBtn:  document.getElementById('rename-confirm'),
+  };
+
+  function _renamePhase(phase) {
+    const isConfigure = phase === 'configure';
+    renameDlg.configPhase.classList.toggle('hidden', !isConfigure);
+    renameDlg.errorPhase.classList.toggle('visible',  !isConfigure);
+    if (isConfigure) {
+      renameDlg.title.textContent     = 'Rename';
+      renameDlg.cancelBtn.textContent = 'Cancel';
+      renameDlg.confirmBtn.style.display = '';
+    } else {
+      renameDlg.title.textContent     = 'Error';
+      renameDlg.cancelBtn.textContent = 'Close';
+      renameDlg.confirmBtn.style.display = 'none';
+    }
+  }
+
+  renameDlg.bg.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); renameDlg.cancelBtn.click(); }
+  });
+
+  renameDlg.input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); renameDlg.confirmBtn.click(); }
+    if (e.key === 'Escape') { e.preventDefault(); renameDlg.cancelBtn.click(); }
+  });
+
+  async function cmdRename() {
+    if (appState.busy) return;
+    const side = appState.activePanel;
+    const sel  = selArray(side);
+    if (sel.length !== 1) return;
+
+    const sourcePath = sel[0];
+    const currentName = S.shortenPath(sourcePath);
+    if (!S.canRename(sel, appState.panels[side].entries, appState.busy)) return;
+
+    // ── Configure phase ──────────────────────────────────────────────────────
+    renameDlg.title.textContent = S.renameDialogHeader(currentName);
+    renameDlg.input.value = currentName;
+
+    // Pre-select persisted conflict preferences (reuse the move/copy keys'
+    // shape but rename has its own independent persisted choices)
+    const filesVal   = appState.config.renameConflictFiles   || 'abort';
+    const foldersVal = appState.config.renameConflictFolders || 'abort';
+    document.querySelectorAll('input[name=renameConflictFiles]').forEach(r => {
+      r.checked = r.value === filesVal;
+    });
+    document.querySelectorAll('input[name=renameConflictFolders]').forEach(r => {
+      r.checked = r.value === foldersVal;
+    });
+
+    _renamePhase('configure');
+    renameDlg.bg.classList.add('visible');
+    setTimeout(() => { renameDlg.input.focus(); renameDlg.input.select(); }, 30);
+
+    const newName = await new Promise(resolve => {
+      const onCancel  = () => { cleanup(); resolve(null); };
+      const onConfirm = () => { cleanup(); resolve(renameDlg.input.value.trim()); };
+      function cleanup() {
+        renameDlg.cancelBtn.removeEventListener('click', onCancel);
+        renameDlg.confirmBtn.removeEventListener('click', onConfirm);
+      }
+      renameDlg.cancelBtn.addEventListener('click', onCancel);
+      renameDlg.confirmBtn.addEventListener('click', onConfirm);
+    });
+
+    // Cancelled, empty, or unchanged — close without touching the disk
+    if (!newName || newName === currentName) {
+      renameDlg.bg.classList.remove('visible');
+      return;
+    }
+
+    const conflictFiles   = document.querySelector('input[name=renameConflictFiles]:checked')?.value   || 'abort';
+    const conflictFolders = document.querySelector('input[name=renameConflictFolders]:checked')?.value || 'abort';
+
+    // Persist preferences
+    appState = {
+      ...appState,
+      config: { ...appState.config, renameConflictFiles: conflictFiles, renameConflictFolders: conflictFolders },
+    };
+
+    // ── Task ───────────────────────────────────────────────────────────────────
+    adapter.assign('worker/tasks/rename.js', {
+      panel: side, source: sourcePath, newName, conflictFiles, conflictFolders,
+    }).catch(err => {
+      if (renameDlg._resultResolve) {
+        const r = renameDlg._resultResolve; renameDlg._resultResolve = null;
+        r({ ok: false, error: err.message });
+      }
+    });
+
+    const result = await new Promise(resolve => { renameDlg._resultResolve = resolve; });
+
+    if (result.ok) { renameDlg.bg.classList.remove('visible'); return; }
+
+    // ── Error phase ────────────────────────────────────────────────────────────
+    const parts = (result.error || 'Unknown error').split('\n\n');
+    renameDlg.errorMsg.innerHTML = '';
+    parts.forEach((p, i) => {
+      const el = document.createElement('p');
+      el.textContent = p;
+      if (i > 0) el.className = 'msg-tip';
+      renameDlg.errorMsg.appendChild(el);
+    });
+    _renamePhase('error');
+
+    await new Promise(resolve => {
+      const onClose = () => { renameDlg.cancelBtn.removeEventListener('click', onClose); resolve(); };
+      renameDlg.cancelBtn.addEventListener('click', onClose);
+    });
+    renameDlg.bg.classList.remove('visible');
   }
 
   // ─── Copy dialog (three-phase) ───────────────────────────────────────────────
@@ -1042,6 +1180,7 @@
     const other = side === 'left' ? 'right' : 'left';
     if (e.key === 'F2')                              { e.preventDefault(); refreshBoth(); }
     else if (e.key === 'F5')                         { e.preventDefault(); cmdCopy(); }
+    else if (e.key === 'F6' && e.shiftKey)           { e.preventDefault(); cmdRename(); }
     else if (e.key === 'F6')                         { e.preventDefault(); cmdMove(); }
     else if (e.key === 'F7')                         { e.preventDefault(); cmdMkdir(); }
     else if (e.key === 'F8' || e.key === 'Delete')   { e.preventDefault(); cmdDelete(); }
@@ -1060,6 +1199,7 @@
   dom.fkView.addEventListener('click',   () => showError('Coming soon', 'View not yet implemented'));
   dom.fkEdit.addEventListener('click',   () => showError('Coming soon', 'Edit not yet implemented'));
   dom.fkCopy.addEventListener('click',   cmdCopy);
+  dom.fkRename.addEventListener('click', cmdRename);
   dom.fkMove.addEventListener('click',   cmdMove);
   dom.fkMkdir.addEventListener('click',  cmdMkdir);
   dom.fkDelete.addEventListener('click', cmdDelete);

@@ -609,6 +609,62 @@ describe('fkeyEnabledState', () => {
   });
 });
 
+// ─── canRename ────────────────────────────────────────────────────────────────
+
+describe('canRename', () => {
+  const entries = [
+    { path: '/a/writable.txt', writable: true },
+    { path: '/a/readonly.txt', writable: false },
+    { path: '/a/unknown.txt' }, // writable not explicitly set
+  ];
+
+  test('false when busy', () => {
+    assert.equal(S.canRename(['/a/writable.txt'], entries, true), false);
+  });
+
+  test('false when no selection', () => {
+    assert.equal(S.canRename([], entries, false), false);
+  });
+
+  test('false when multiple selected', () => {
+    assert.equal(S.canRename(['/a/writable.txt', '/a/readonly.txt'], entries, false), false);
+  });
+
+  test('true for a single writable entry', () => {
+    assert.equal(S.canRename(['/a/writable.txt'], entries, false), true);
+  });
+
+  test('false for a single read-only entry', () => {
+    assert.equal(S.canRename(['/a/readonly.txt'], entries, false), false);
+  });
+
+  test('true when writable is not explicitly false (defaults to writable)', () => {
+    assert.equal(S.canRename(['/a/unknown.txt'], entries, false), true);
+  });
+
+  test('false when selected path is not found in entries', () => {
+    assert.equal(S.canRename(['/a/missing.txt'], entries, false), false);
+  });
+});
+
+// ─── renameDialogHeader / renameErrorMessage ─────────────────────────────────
+
+describe('renameDialogHeader', () => {
+  test('wraps the current name in quotes', () => {
+    assert.equal(S.renameDialogHeader('photo.png'), 'Rename "photo.png"');
+  });
+});
+
+describe('renameErrorMessage', () => {
+  test('returns the given reason', () => {
+    assert.equal(S.renameErrorMessage('Folder already exists'), 'Folder already exists');
+  });
+  test('falls back to a default when no reason given', () => {
+    assert.equal(S.renameErrorMessage(), 'Rename failed');
+    assert.equal(S.renameErrorMessage(''), 'Rename failed');
+  });
+});
+
 // ─── opConfirmMessage ────────────────────────────────────────────────────────
 
 describe('opConfirmMessage', () => {

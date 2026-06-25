@@ -98,6 +98,10 @@ const DEFAULT_CONFIG = {
   moveConflictFolders: 'abort',
   moveShowReport:      true,
   moveKeepOnAbort:     false,
+
+  // Rename dialog preferences (subset: no merge, no progress/report)
+  renameConflictFiles:   'abort',
+  renameConflictFolders: 'abort',
 };
 
 // Maximum navigation history entries kept per panel

@@ -406,7 +406,8 @@
 
     /* F-key bar */
     #fkey-bar {
-      flex: 0 0 var(--fkey-h);
+      flex: 0 0 auto;
+      min-height: var(--fkey-h);
       display: flex;
       background: var(--fkey-bg);
       border-top: 1px solid var(--border);
@@ -414,23 +415,30 @@
     }
     .fkey {
       flex: 1;
-      height: var(--fkey-h);
+      min-height: var(--fkey-h);
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 3px;
+      gap: 1px;
+      padding: 4px 2px;
       background: transparent;
       border: none;
       border-right: 1px solid var(--border);
       cursor: pointer;
       font-family: var(--font-ui);
       transition: background var(--transition);
+      text-align: center;
     }
     .fkey:last-child { border-right: none; }
     .fkey:hover:not(:disabled) { background: var(--bg4); }
     .fkey:disabled { opacity: .35; cursor: default; }
     .fkey-label { font-size: 10px; color: var(--fkey-label); font-weight: 600; }
-    .fkey-name  { font-size: 12px; color: var(--fkey-text); }
+    .fkey-name  {
+      font-size: 12px; color: var(--fkey-text);
+      text-align: center; line-height: 1.25;
+      overflow-wrap: break-word;
+    }
 
     /* Overlay */
     #overlay-bg {
@@ -558,6 +566,45 @@
     #mkdir-configure-phase { display: block; }
     #mkdir-configure-phase.hidden { display: none; }
     #mkdir-footer {
+      display: flex; justify-content: flex-end; gap: 8px;
+    }
+
+    /* ── Rename dialog ──────────────────────────────────────────────────────── */
+    #rename-dialog-bg {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.55); z-index: 110;
+      align-items: center; justify-content: center;
+    }
+    #rename-dialog-bg.visible { display: flex; }
+    #rename-dialog {
+      background: var(--bg2); border: 1px solid var(--border2);
+      border-radius: 10px; width: 460px; max-width: 96vw;
+      padding: 20px 22px 16px;
+    }
+    #rename-dialog-title {
+      font-size: 13px; font-weight: 600; color: var(--text);
+      margin-bottom: 12px;
+    }
+    #rename-input {
+      width: 100%; height: 28px; padding: 0 10px;
+      background: var(--bg3); border: 1px solid var(--border2);
+      border-radius: 5px; color: var(--text);
+      font-size: 12px; font-family: var(--font-mono);
+      margin-bottom: 14px; box-sizing: border-box;
+    }
+    #rename-input:focus { outline: none; border-color: var(--accent2); }
+    #rename-configure-phase { display: block; }
+    #rename-configure-phase.hidden { display: none; }
+    #rename-error-phase { display: none; }
+    #rename-error-phase.visible { display: block; }
+    #rename-error-msg {
+      font-size: 12px; color: var(--text2);
+      margin-bottom: 16px; line-height: 1.5;
+    }
+    #rename-error-msg .msg-tip {
+      color: var(--text3); font-size: 11px; margin-top: 8px;
+    }
+    #rename-footer {
       display: flex; justify-content: flex-end; gap: 8px;
     }
 
@@ -712,6 +759,7 @@
     <button class="fkey" id="fk-view"  disabled><span class="fkey-label">F3</span><span class="fkey-name">View</span></button>
     <button class="fkey" id="fk-edit"  disabled><span class="fkey-label">F4</span><span class="fkey-name">Edit</span></button>
     <button class="fkey" id="fk-copy"  disabled><span class="fkey-label">F5</span><span class="fkey-name">Copy</span></button>
+    <button class="fkey" id="fk-rename" disabled><span class="fkey-label">\u21e7F6</span><span class="fkey-name">Rename</span></button>
     <button class="fkey" id="fk-move"  disabled><span class="fkey-label">F6</span><span class="fkey-name">Move</span></button>
     <button class="fkey" id="fk-mkdir"           ><span class="fkey-label">F7</span><span class="fkey-name">New Folder</span></button>
     <button class="fkey" id="fk-delete" disabled><span class="fkey-label">F8</span><span class="fkey-name">Delete</span></button>
@@ -738,6 +786,44 @@
       <div id="delete-footer">
         <button class="copy-btn" id="delete-cancel">Cancel</button>
         <button class="copy-btn danger" id="delete-confirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rename dialog -->
+  <div id="rename-dialog-bg" tabindex="-1">
+    <div id="rename-dialog">
+      <div id="rename-dialog-title">Rename</div>
+
+      <!-- Phase: configure -->
+      <div id="rename-configure-phase">
+        <input id="rename-input" type="text" autocomplete="off" spellcheck="false" />
+
+        <div class="copy-conflict-row">
+          <fieldset class="copy-conflict-group">
+            <legend>&#128193; If a folder clashes</legend>
+            <label class="copy-radio-row"><input type="radio" name="renameConflictFolders" value="abort"/>  <span>Abort</span></label>
+            <label class="copy-radio-row"><input type="radio" name="renameConflictFolders" value="replace"/><span>Replace</span></label>
+            <label class="copy-radio-row"><input type="radio" name="renameConflictFolders" value="prefix"/> <span>Keep both (add prefix)</span></label>
+          </fieldset>
+          <fieldset class="copy-conflict-group">
+            <legend>&#128196; If a file clashes</legend>
+            <label class="copy-radio-row"><input type="radio" name="renameConflictFiles" value="abort" />      <span>Abort</span></label>
+            <label class="copy-radio-row"><input type="radio" name="renameConflictFiles" value="replaceOlder"/><span>Replace older</span></label>
+            <label class="copy-radio-row"><input type="radio" name="renameConflictFiles" value="replaceAll"/>  <span>Replace</span></label>
+            <label class="copy-radio-row"><input type="radio" name="renameConflictFiles" value="prefix"/>      <span>Keep both (add prefix)</span></label>
+          </fieldset>
+        </div>
+      </div>
+
+      <!-- Phase: error -->
+      <div id="rename-error-phase">
+        <div id="rename-error-msg"></div>
+      </div>
+
+      <div id="rename-footer">
+        <button class="copy-btn" id="rename-cancel">Cancel</button>
+        <button class="copy-btn primary" id="rename-confirm">Rename</button>
       </div>
     </div>
   </div>

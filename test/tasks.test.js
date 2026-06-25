@@ -867,6 +867,266 @@ describe('move task', () => {
   });
 });
 
+// ─── rename ───────────────────────────────────────────────────────────────────
+
+describe('rename task', () => {
+  test('renames a file successfully', async () => {
+    const src = path.join(workDir, 'old-name.txt');
+    await mkfile(src, 'hello');
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: 'new-name.txt' });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok, 'task should succeed');
+    assert.ok(!fs.existsSync(src));
+    assert.ok(fs.existsSync(path.join(workDir, 'new-name.txt')));
+    assert.equal(fs.readFileSync(path.join(workDir, 'new-name.txt'), 'utf8'), 'hello');
+    assert.equal(result.renamedTo, path.join(workDir, 'new-name.txt'));
+  });
+
+  test('renames a directory successfully', async () => {
+    const src = path.join(workDir, 'old-dir');
+    await fsp.mkdir(src);
+    await mkfile(path.join(src, 'inner.txt'), 'x');
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: 'new-dir' });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(ok);
+    assert.ok(!fs.existsSync(src));
+    assert.ok(fs.existsSync(path.join(workDir, 'new-dir', 'inner.txt')));
+  });
+
+  test('fails when source no longer exists', async () => {
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({
+      panel: 'left', source: path.join(workDir, 'ghost.txt'), newName: 'whatever.txt',
+    });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no longer exists/i);
+  });
+
+  test('fails when no source specified', async () => {
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: '', newName: 'x.txt' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no item specified/i);
+  });
+
+  test('fails when newName is empty', async () => {
+    const src = path.join(workDir, 'a.txt');
+    await mkfile(src);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: '   ' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /new name is required/i);
+  });
+
+  test('fails when newName equals current name (no-op guard)', async () => {
+    const src = path.join(workDir, 'same.txt');
+    await mkfile(src);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: 'same.txt' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /same as the current name/i);
+    // file must be untouched
+    assert.ok(fs.existsSync(src));
+  });
+
+  test('fails for "." or ".." as new name', async () => {
+    const src = path.join(workDir, 'b.txt');
+    await mkfile(src);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: '..' });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(!ok);
+  });
+
+  test('fails for names containing path separators', async () => {
+    const src = path.join(workDir, 'c.txt');
+    await mkfile(src);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: 'a/b' });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(!ok);
+  });
+
+  test('fails for read-only source', async () => {
+    const src = path.join(workDir, 'readonly.txt');
+    await mkfile(src);
+    await fsp.chmod(src, 0o444);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: 'renamed.txt' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    // chmod 444 prevents write but on some systems the owner can still rename;
+    // accept either outcome but if it fails, message should mention read-only
+    if (!ok) assert.match(error, /read-only/i);
+    await fsp.chmod(src, 0o644).catch(() => {}); // cleanup, ignore if renamed away
+  });
+
+  test('file clash: abort (default) fails with already-exists message', async () => {
+    const src = path.join(workDir, 'src.txt');
+    const clash = path.join(workDir, 'clash.txt');
+    await mkfile(src, 'src');
+    await mkfile(clash, 'existing');
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: 'clash.txt' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /already exists/i);
+    assert.equal(fs.readFileSync(clash, 'utf8'), 'existing'); // untouched
+  });
+
+  test('file clash: replaceOlder replaces an older destination', async () => {
+    const src = path.join(workDir, 'newer.txt');
+    const clash = path.join(workDir, 'target.txt');
+    await mkfile(src, 'fresh');
+    await mkfile(clash, 'stale');
+    const past = new Date(Date.now() - 10000);
+    await fsp.utimes(clash, past, past);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({
+      panel: 'left', source: src, newName: 'target.txt', conflictFiles: 'replaceOlder',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(ok);
+    assert.equal(fs.readFileSync(clash, 'utf8'), 'fresh');
+  });
+
+  test('file clash: replaceOlder rejects when destination is newer', async () => {
+    const src = path.join(workDir, 'old.txt');
+    const clash = path.join(workDir, 'target2.txt');
+    await mkfile(src, 'old content');
+    await mkfile(clash, 'newer content');
+    const future = new Date(Date.now() + 10000);
+    await fsp.utimes(clash, future, future);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({
+      panel: 'left', source: src, newName: 'target2.txt', conflictFiles: 'replaceOlder',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(!ok);
+    assert.equal(fs.readFileSync(clash, 'utf8'), 'newer content');
+  });
+
+  test('file clash: replaceAll overwrites regardless of age', async () => {
+    const src = path.join(workDir, 'force.txt');
+    const clash = path.join(workDir, 'forced-target.txt');
+    await mkfile(src, 'new');
+    await mkfile(clash, 'old');
+    const future = new Date(Date.now() + 10000);
+    await fsp.utimes(clash, future, future);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({
+      panel: 'left', source: src, newName: 'forced-target.txt', conflictFiles: 'replaceAll',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(ok);
+    assert.equal(fs.readFileSync(clash, 'utf8'), 'new');
+  });
+
+  test('file clash: prefix keeps both, renamed item gets a (n) prefix', async () => {
+    const src = path.join(workDir, 'dup-src.txt');
+    const clash = path.join(workDir, 'taken.txt');
+    await mkfile(src, 'src-content');
+    await mkfile(clash, 'clash-content');
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({
+      panel: 'left', source: src, newName: 'taken.txt', conflictFiles: 'prefix',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.ok(fs.existsSync(path.join(workDir, '(1) taken.txt')));
+    assert.equal(fs.readFileSync(clash, 'utf8'), 'clash-content'); // original untouched
+    assert.equal(result.renamedTo, path.join(workDir, '(1) taken.txt'));
+  });
+
+  test('folder clash: abort (default) fails', async () => {
+    const src = path.join(workDir, 'dir-src');
+    const clash = path.join(workDir, 'dir-clash');
+    await fsp.mkdir(src);
+    await fsp.mkdir(clash);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: 'dir-clash' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /already exists/i);
+  });
+
+  test('folder clash: replace removes existing and renames in', async () => {
+    const src = path.join(workDir, 'dir-src2');
+    const clash = path.join(workDir, 'dir-clash2');
+    await fsp.mkdir(src);
+    await mkfile(path.join(src, 'inside.txt'), 'fresh');
+    await fsp.mkdir(clash);
+    await mkfile(path.join(clash, 'old-inside.txt'), 'stale');
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({
+      panel: 'left', source: src, newName: 'dir-clash2', conflictFolders: 'replace',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(ok);
+    assert.ok(fs.existsSync(path.join(workDir, 'dir-clash2', 'inside.txt')));
+    assert.ok(!fs.existsSync(path.join(workDir, 'dir-clash2', 'old-inside.txt')));
+  });
+
+  test('folder clash: prefix keeps both folders side by side', async () => {
+    const src = path.join(workDir, 'dir-src3');
+    const clash = path.join(workDir, 'dir-clash3');
+    await fsp.mkdir(src);
+    await fsp.mkdir(clash);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({
+      panel: 'left', source: src, newName: 'dir-clash3', conflictFolders: 'prefix',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(ok);
+    assert.ok(fs.existsSync(path.join(workDir, '(1) dir-clash3')));
+    assert.ok(fs.existsSync(clash), 'original clashing folder should remain');
+  });
+
+  test('refreshed panel reflects the new name', async () => {
+    const src = path.join(workDir, 'before.txt');
+    await mkfile(src);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: 'after.txt' });
+    task.start(ctx);
+    const { result } = await promise;
+    assert.ok(result.entries.find(e => e.name === 'after.txt'));
+    assert.ok(!result.entries.find(e => e.name === 'before.txt'));
+  });
+
+  test('reports progress through the operation', async () => {
+    const src = path.join(workDir, 'progress.txt');
+    await mkfile(src);
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: 'progressed.txt' });
+    task.start(ctx);
+    const { progressLog } = await promise;
+    assert.ok(progressLog.length >= 2);
+    assert.equal(progressLog[progressLog.length - 1].pct, 100);
+  });
+});
+
 // ─── navigate task ────────────────────────────────────────────────────────────
 
 describe('navigate task', () => {

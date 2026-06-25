@@ -382,6 +382,45 @@ function fkeyEnabledState(selection, busy) {
 }
 
 /**
+ * Determine whether the Rename command (Shift+F6) should be enabled.
+ * Rename only makes sense for exactly one selected item, and only if that
+ * item is writable.
+ *
+ * @param {string[]} selection — selected paths
+ * @param {object[]} entries   — current panel's FsEntry[] (to look up writable)
+ * @param {boolean}  busy
+ * @returns {boolean}
+ */
+function canRename(selection, entries, busy) {
+  if (busy) return false;
+  if (selection.length !== 1) return false;
+  const entry = entries.find(e => e.path === selection[0]);
+  if (!entry) return false;
+  return entry.writable !== false;
+}
+
+/**
+ * Build the header line for the rename dialog.
+ * @param {string} currentName
+ * @returns {string}
+ */
+function renameDialogHeader(currentName) {
+  return `Rename "${currentName}"`;
+}
+
+/**
+ * Build the rename report/confirmation outcome message.
+ * Mirrors copyReport's style but singular, and without the "report" phase —
+ * used only for error display since rename has no progress/report dialog.
+ *
+ * @param {string} reason
+ * @returns {string}
+ */
+function renameErrorMessage(reason) {
+  return reason || 'Rename failed';
+}
+
+/**
  * Build the confirmation message for a copy/move operation.
  * @param {'copy'|'move'} op
  * @param {number}        count
@@ -506,6 +545,9 @@ const uiState = {
   shortenPath,
   escHtml,
   fkeyEnabledState,
+  canRename,
+  renameDialogHeader,
+  renameErrorMessage,
   opConfirmMessage,
   copyDialogHeader,
   copyReport,
