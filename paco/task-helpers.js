@@ -112,6 +112,46 @@ function resolvePath(rawPath) {
 }
 
 /**
+ * Resolve the directory a panel should open at startup.
+ *
+ * Preference order:
+ *   1. An explicitly requested path (e.g. user clicked a breadcrumb) — used as-is.
+ *   2. The last-known panel path persisted on disk, IF it still exists and is
+ *      a readable directory.
+ *   3. The OS home directory, as the ultimate fallback.
+ *
+ * This is what lets PACO "reopen where the user last was" across sessions,
+ * while degrading gracefully if that directory was deleted, unmounted
+ * (e.g. an external drive), or otherwise became inaccessible.
+ *
+ * @param {string} requestedPath  — explicit path from the caller ('' = none)
+ * @param {string} savedPath      — last-known path from context.readState()
+ * @returns {Promise<string>}     — a path guaranteed to exist as a readable dir,
+ *                                  or the home directory if nothing else works
+ */
+async function resolveStartupPath(requestedPath, savedPath) {
+  const os = require('os');
+
+  if (requestedPath) {
+    return nodePath.resolve(requestedPath);
+  }
+
+  if (savedPath) {
+    const resolvedSaved = nodePath.resolve(savedPath);
+    try {
+      const entry = await fs.stat(resolvedSaved);
+      if (entry && entry.type === 'dir' && entry.readable) {
+        return resolvedSaved;
+      }
+    } catch (_) {
+      // fall through to home
+    }
+  }
+
+  return os.homedir();
+}
+
+/**
  * Compute the destination path for a single source item being copied/moved
  * into a target directory.
  *
@@ -162,6 +202,7 @@ module.exports = {
   refreshPanel,
   refreshBothPanels,
   resolvePath,
+  resolveStartupPath,
   dstFor,
   makeProgressTracker,
 };

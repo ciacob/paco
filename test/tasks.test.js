@@ -1144,13 +1144,41 @@ describe('navigate task', () => {
     assert.ok(result.config);
   });
 
-  test('defaults to home dir when path is empty', async () => {
+  test('empty path falls back to the panel\u2019s last-known saved path', async () => {
+    // The global beforeEach already set both panels' saved path to workDir
+    const task = require('../worker/tasks/navigate');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: '' });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.path, workDir);
+  });
+
+  test('falls back to home dir when the saved path no longer exists', async () => {
+    const context = require('../paco/context');
+    const ghostPath = path.join(workDir, 'this-folder-was-deleted');
+    context.updatePanel('left', {
+      path: ghostPath, selection: [],
+      tabs: [{ id: 'tab-default', path: ghostPath, label: null }],
+      activeTab: 'tab-default',
+    });
     const task = require('../worker/tasks/navigate');
     const { ctx, promise } = makeCtx({ panel: 'left', path: '' });
     task.start(ctx);
     const { ok, result } = await promise;
     assert.ok(ok);
     assert.equal(result.path, require('os').homedir());
+  });
+
+  test('an explicit path always wins over the saved path', async () => {
+    const otherDir = await fsp.mkdtemp(path.join(workDir, 'other-'));
+    const task = require('../worker/tasks/navigate');
+    // saved path is workDir (from beforeEach), but we explicitly ask for otherDir
+    const { ctx, promise } = makeCtx({ panel: 'left', path: otherDir });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.path, otherDir);
   });
 
   test('fails for unreadable path', async () => {

@@ -8,7 +8,7 @@
  * tested indirectly via the task integration tests.
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const helpers = require('../paco/task-helpers');
 
@@ -28,6 +28,65 @@ describe('resolvePath', () => {
   test('throws for null/undefined', () => {
     assert.throws(() => helpers.resolvePath(null),    /required/i);
     assert.throws(() => helpers.resolvePath(undefined), /required/i);
+  });
+});
+
+// ─── resolveStartupPath ────────────────────────────────────────────────────────
+
+describe('resolveStartupPath', () => {
+  const fs   = require('fs');
+  const fsp  = require('fs/promises');
+  const path = require('path');
+  const os   = require('os');
+
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'paco-startup-'));
+  });
+
+  after(async () => {
+    await fsp.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test('explicit requestedPath always wins, regardless of savedPath', async () => {
+    const r = await helpers.resolveStartupPath(tmpDir, '/some/other/saved/path');
+    assert.equal(r, path.resolve(tmpDir));
+  });
+
+  test('falls back to savedPath when no requestedPath given', async () => {
+    const r = await helpers.resolveStartupPath('', tmpDir);
+    assert.equal(r, path.resolve(tmpDir));
+  });
+
+  test('falls back to home when savedPath no longer exists', async () => {
+    const ghost = path.join(tmpDir, 'this-was-deleted');
+    const r = await helpers.resolveStartupPath('', ghost);
+    assert.equal(r, os.homedir());
+  });
+
+  test('falls back to home when savedPath is a file, not a directory', async () => {
+    const filePath = path.join(tmpDir, 'just-a-file.txt');
+    await fsp.writeFile(filePath, 'x');
+    const r = await helpers.resolveStartupPath('', filePath);
+    assert.equal(r, os.homedir());
+  });
+
+  test('falls back to home when both requestedPath and savedPath are empty', async () => {
+    const r = await helpers.resolveStartupPath('', '');
+    assert.equal(r, os.homedir());
+  });
+
+  test('falls back to home when savedPath is null/undefined', async () => {
+    const r1 = await helpers.resolveStartupPath('', null);
+    const r2 = await helpers.resolveStartupPath('', undefined);
+    assert.equal(r1, os.homedir());
+    assert.equal(r2, os.homedir());
+  });
+
+  test('relative requestedPath gets resolved to absolute', async () => {
+    const r = await helpers.resolveStartupPath('some/relative/dir', '');
+    assert.ok(path.isAbsolute(r));
   });
 });
 

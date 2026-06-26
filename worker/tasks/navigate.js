@@ -7,7 +7,11 @@
  *
  * Config:
  *   {string}  panel              — 'left' | 'right'
- *   {string}  path               — absolute path to navigate to ('' = home dir)
+ *   {string}  path               — absolute path to navigate to
+ *                                  ('' = no explicit request: falls back to
+ *                                   this panel's last-known saved path, then
+ *                                   to the home directory if that path is
+ *                                   gone or no longer a readable directory)
  *   {string}  [tabId]            — tab to update (defaults to panel's activeTab)
  *   {boolean} [pushHistory=true]
  *
@@ -15,7 +19,6 @@
  */
 
 const nodePath = require('path');
-const os       = require('os');
 const context  = require('../../paco/context');
 const provider = require('../../paco/fs-provider');
 const helpers  = require('../../paco/task-helpers');
@@ -29,10 +32,14 @@ module.exports = {
     const { config, state } = helpers.boot();
 
     // ── 2. Resolve target path ────────────────────────────────────────────────
+    // Empty rawPath means "no explicit request" — fall back to wherever this
+    // panel was last left (so PACO reopens where the user left off), and
+    // ultimately to the home directory if that saved path is gone or invalid.
     ctx.progress(10, 'Resolving path…');
     let resolved;
     try {
-      resolved = rawPath ? nodePath.resolve(rawPath) : os.homedir();
+      const savedPath = state.panels[panel] ? state.panels[panel].path : '';
+      resolved = await helpers.resolveStartupPath(rawPath, savedPath);
     } catch (err) {
       return ctx.fail(`Invalid path: ${err.message}`);
     }
