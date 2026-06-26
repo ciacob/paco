@@ -143,6 +143,9 @@
             appState = { ...appState, config: payload.config };
             dom.html.setAttribute('data-theme', payload.config.theme || 'dark');
           }
+          if (payload.platform) {
+            appState = { ...appState, platform: payload.platform };
+          }
           renderPanel(payload.panel);
         }
       }
@@ -405,7 +408,10 @@
       row.className = 'entry' + (sel.has(entry.path) ? ' selected' : '');
       row.dataset.path = entry.path;
 
-      const icon      = entry.type === 'dir' ? '📁' : entry.type === 'symlink' ? '🔗' : '📄';
+      const isSpinning = appState._spinningPath === entry.path;
+      const icon = isSpinning
+        ? '<span class="entry-spinner" aria-label="Opening…"></span>'
+        : (entry.type === 'dir' ? '📁' : entry.type === 'symlink' ? '🔗' : '📄');
       const nameClass = entry.type === 'dir' ? 'is-dir' : entry.type === 'symlink' ? 'is-link' : '';
 
       row.innerHTML = `
@@ -1163,6 +1169,52 @@
     }).catch(err => showError('Delete failed', err.message));
   }
 
+  // ─── Enter: open natively, or navigate into a regular folder ──────────────────
+
+  // True while any modal dialog is open, so the global Enter handler can
+  // stay out of the way of dialogs' own Enter-to-confirm bindings (those
+  // listeners don't stopPropagation, so this event still bubbles to us).
+  function _anyDialogOpen() {
+    return mkdirDlg.bg.classList.contains('visible')
+        || renameDlg.bg.classList.contains('visible')
+        || copyDlg.bg.classList.contains('visible')
+        || deleteDlg.bg.classList.contains('visible')
+        || dom.overlay.classList.contains('visible');
+  }
+
+  // Duration the icon-spinner shows for, in ms. Purely cosmetic — see
+  // worker/tasks/open-native.js for why this is decoupled from the task's
+  // actual completion: there is no reliable "the app has opened" signal.
+  const OPEN_SPINNER_MS = 2500;
+
+  function cmdEnterAction() {
+    if (appState.busy) return;
+    const side = appState.activePanel;
+    const sel  = selArray(side);
+    const entries = appState.panels[side].entries;
+    const decision = S.decideEnterAction(sel, entries, appState.platform);
+
+    if (decision.action === 'navigate') {
+      navigate(side, decision.path);
+    } else if (decision.action === 'open') {
+      appState = { ...appState, _spinningPath: decision.path };
+      renderList(side, appState.panels[side]);
+      setTimeout(() => {
+        // Only clear if this is still the spinner we set — avoids clobbering
+        // a newer spin started by a second Enter press in the meantime.
+        if (appState._spinningPath === decision.path) {
+          appState = { ...appState, _spinningPath: null };
+          renderList(side, appState.panels[side]);
+        }
+      }, OPEN_SPINNER_MS);
+
+      adapter.assign('worker/tasks/open-native.js', { path: decision.path })
+        .catch(err => showError('Could not open', err.message));
+    }
+    // action === 'none' → no-op, by design
+  }
+
+
   // ─── Event wiring ─────────────────────────────────────────────────────────────
 
   ['left', 'right'].forEach(side => {
@@ -1190,6 +1242,10 @@
     else if (e.key === 'F8' || e.key === 'Delete')   { e.preventDefault(); cmdDelete(); }
     else if (e.key === 'Tab')                        { e.preventDefault(); setActivePanel(other); pd(other).list.focus(); }
     else if (e.key === 'Backspace' && !e.target.matches('input')) { e.preventDefault(); navigate(side, S.parentPath(appState.panels[side].path)); }
+    else if (e.key === 'Enter' && !e.target.matches('input') && !_anyDialogOpen()) {
+      e.preventDefault();
+      cmdEnterAction();
+    }
     else if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
       if (!e.target.matches('input, select')) {
         e.preventDefault();

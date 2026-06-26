@@ -39,6 +39,11 @@ function makeAppState(overrides = {}) {
     activePanel: 'left',
     busy:        false,
     bootPhase:   'idle',   // 'idle' | 'booting-left' | 'booting-right' | 'ready'
+    // The worker's actual OS, learned from the first navigate result.
+    // Defaults to 'other' (i.e. "assume not macOS") until that arrives, so
+    // macOS-only behaviour (like bundle-folder detection) never fires on a
+    // guess — it only activates once we've heard from the worker for real.
+    platform: 'other',
     panels: {
       left:  makePanelState(),
       right: makePanelState(),
@@ -439,6 +444,86 @@ function renameErrorMessage(reason) {
   return reason || 'Rename failed';
 }
 
+// ─── Open natively (Enter key) ─────────────────────────────────────────────────
+
+/**
+ * Known macOS bundle-style directory extensions. These are directories that
+ * the OS treats as a single double-clickable/openable unit rather than a
+ * folder to browse into — most commonly .app, but also a handful of other
+ * Apple bundle conventions a user might reasonably encounter in Finder.
+ *
+ * Deliberately a short, explicit allow-list rather than a heuristic, so a
+ * folder like "My.Project" is never mistaken for a bundle.
+ */
+const MAC_BUNDLE_EXTENSIONS = new Set([
+  '.app', '.bundle', '.framework', '.plugin', '.kext',
+  '.workflow', '.prefpane', '.qlgenerator', '.saver', '.action',
+]);
+
+/**
+ * Determine whether a directory name matches a known macOS bundle extension.
+ * Case-insensitive on the extension, since macOS's filesystem usually is.
+ *
+ * This check is extension-shape only — callers are responsible for also
+ * checking `process.platform === 'darwin'`, since this concept is
+ * macOS-specific and meaningless (and should not trigger) elsewhere.
+ *
+ * @param {string} name — directory name (basename, not full path)
+ * @returns {boolean}
+ */
+function isMacBundleDir(name) {
+  if (!name) return false;
+  const lastDot = name.lastIndexOf('.');
+  if (lastDot <= 0) return false; // no extension, or a dotfile with nothing before it
+  const ext = name.slice(lastDot).toLowerCase();
+  return MAC_BUNDLE_EXTENSIONS.has(ext);
+}
+
+/**
+ * Decide what Enter should do for the currently selected entry.
+ *
+ * Rules:
+ *   - Exactly one selected item is required; zero or multiple → 'none'.
+ *   - A regular file with an extension → 'open' (hand off to the OS).
+ *   - A regular file with no extension → 'none' (escape hatch is the future
+ *     View/Edit commands, not a blind OS hand-off).
+ *   - A directory matching a known macOS bundle extension, only when
+ *     platform is 'darwin' → 'open'.
+ *   - Any other directory (including dotted names that aren't bundles, and
+ *     ALL directories on non-macOS platforms) → 'navigate'.
+ *   - Symlinks are currently a no-op, consistent with existing double-click
+ *     behaviour elsewhere in the panel, which also only acts on type 'dir'.
+ *
+ * @param {string[]} selection — selected paths in the active panel
+ * @param {object[]} entries   — current panel's FsEntry[]
+ * @param {string}   platform  — process.platform string (injected, not read
+ *                               directly, so this stays pure and testable)
+ * @returns {{ action: 'navigate'|'open'|'none', path: string|null }}
+ */
+function decideEnterAction(selection, entries, platform) {
+  if (selection.length !== 1) return { action: 'none', path: null };
+
+  const entry = entries.find(e => e.path === selection[0]);
+  if (!entry) return { action: 'none', path: null };
+
+  if (entry.type === 'dir') {
+    if (platform === 'darwin' && isMacBundleDir(entry.name)) {
+      return { action: 'open', path: entry.path };
+    }
+    return { action: 'navigate', path: entry.path };
+  }
+
+  if (entry.type === 'file') {
+    const lastDot = entry.name.lastIndexOf('.');
+    const hasExtension = lastDot > 0; // same "not a leading dot-file" rule as elsewhere
+    if (hasExtension) return { action: 'open', path: entry.path };
+    return { action: 'none', path: null };
+  }
+
+  // symlinks and anything else: no-op for now
+  return { action: 'none', path: null };
+}
+
 /**
  * Build the confirmation message for a copy/move operation.
  * @param {'copy'|'move'} op
@@ -568,6 +653,8 @@ const uiState = {
   canRename,
   renameDialogHeader,
   renameErrorMessage,
+  isMacBundleDir,
+  decideEnterAction,
   opConfirmMessage,
   copyDialogHeader,
   copyReport,

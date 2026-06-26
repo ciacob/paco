@@ -98,6 +98,27 @@ beforeEach(async () => {
   ctx.updatePanel('right', { path: workDir, selection: [], tabs: [{ id: 'tab-default', path: workDir, label: null }], activeTab: 'tab-default' });
 });
 
+/**
+ * Replace the real `open` package in require.cache with a stub, so tests
+ * never actually spawn a real OS-level launcher (Preview, TextEdit, etc.).
+ * Returns a restore() function that must be called afterwards.
+ *
+ * @param {Function} stubFn — the function to use in place of open()
+ * @returns {Function} restore
+ */
+function stubOpenModule(stubFn) {
+  const openPath = require.resolve('open');
+  const had = require.cache[openPath];
+  require.cache[openPath] = {
+    id: openPath, filename: openPath, loaded: true,
+    exports: stubFn,
+  };
+  return () => {
+    if (had) require.cache[openPath] = had;
+    else delete require.cache[openPath];
+  };
+}
+
 // ─── mkdir ────────────────────────────────────────────────────────────────────
 
 describe('mkdir task', () => {
@@ -1122,6 +1143,107 @@ describe('rename task', () => {
     const { ctx, promise } = makeCtx({ panel: 'left', source: src, newName: 'progressed.txt' });
     task.start(ctx);
     const { progressLog } = await promise;
+    assert.ok(progressLog.length >= 2);
+    assert.equal(progressLog[progressLog.length - 1].pct, 100);
+  });
+});
+
+// ─── open-native task ───────────────────────────────────────────────────────────
+
+describe('open-native task', () => {
+  test('calls open() with the given path and succeeds', async () => {
+    const target = path.join(workDir, 'photo.png');
+    await mkfile(target);
+
+    let calledWith = null;
+    const restore = stubOpenModule(async (p) => { calledWith = p; });
+    purgeCache('worker/tasks/open-native');
+
+    const task = require('../worker/tasks/open-native');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    restore();
+
+    assert.ok(ok);
+    assert.equal(calledWith, target);
+    assert.equal(result.opened, true);
+    assert.equal(result.path, target);
+  });
+
+  test('fails when no path is given', async () => {
+    purgeCache('worker/tasks/open-native');
+    const task = require('../worker/tasks/open-native');
+    const { ctx, promise } = makeCtx({ path: '' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no file or folder specified/i);
+  });
+
+  test('fails when the target no longer exists', async () => {
+    purgeCache('worker/tasks/open-native');
+    const task = require('../worker/tasks/open-native');
+    const { ctx, promise } = makeCtx({ path: path.join(workDir, 'ghost.txt') });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no longer exists/i);
+  });
+
+  test('fails with a clear message when the OS launcher itself errors', async () => {
+    const target = path.join(workDir, 'broken.txt');
+    await mkfile(target);
+
+    const restore = stubOpenModule(async () => { throw new Error('spawn ENOENT'); });
+    purgeCache('worker/tasks/open-native');
+
+    const task = require('../worker/tasks/open-native');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, error } = await promise;
+
+    restore();
+
+    assert.ok(!ok);
+    assert.match(error, /could not open/i);
+    assert.match(error, /spawn ENOENT/);
+  });
+
+  test('works for a directory target too (e.g. a macOS bundle)', async () => {
+    const target = path.join(workDir, 'Tool.app');
+    await fsp.mkdir(target);
+
+    let calledWith = null;
+    const restore = stubOpenModule(async (p) => { calledWith = p; });
+    purgeCache('worker/tasks/open-native');
+
+    const task = require('../worker/tasks/open-native');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok } = await promise;
+
+    restore();
+
+    assert.ok(ok);
+    assert.equal(calledWith, target);
+  });
+
+  test('reports progress through the operation', async () => {
+    const target = path.join(workDir, 'p.txt');
+    await mkfile(target);
+
+    const restore = stubOpenModule(async () => {});
+    purgeCache('worker/tasks/open-native');
+
+    const task = require('../worker/tasks/open-native');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { progressLog } = await promise;
+
+    restore();
+
     assert.ok(progressLog.length >= 2);
     assert.equal(progressLog[progressLog.length - 1].pct, 100);
   });

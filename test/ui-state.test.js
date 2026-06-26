@@ -711,6 +711,134 @@ describe('renameErrorMessage', () => {
   });
 });
 
+// ─── isMacBundleDir ───────────────────────────────────────────────────────────
+
+describe('isMacBundleDir', () => {
+  test('recognises .app bundles', () => {
+    assert.equal(S.isMacBundleDir('Safari.app'), true);
+  });
+
+  test('recognises other known bundle extensions', () => {
+    assert.equal(S.isMacBundleDir('MyTool.workflow'), true);
+    assert.equal(S.isMacBundleDir('Foo.framework'), true);
+    assert.equal(S.isMacBundleDir('Bar.prefPane'), true);
+    assert.equal(S.isMacBundleDir('Baz.qlgenerator'), true);
+  });
+
+  test('is case-insensitive on the extension', () => {
+    assert.equal(S.isMacBundleDir('Safari.APP'), true);
+    assert.equal(S.isMacBundleDir('Safari.App'), true);
+  });
+
+  test('rejects an unrelated dotted folder name', () => {
+    assert.equal(S.isMacBundleDir('My.Project'), false);
+  });
+
+  test('rejects a plain folder with no extension', () => {
+    assert.equal(S.isMacBundleDir('Documents'), false);
+  });
+
+  test('rejects a dotfile-style folder (leading dot, nothing before it)', () => {
+    assert.equal(S.isMacBundleDir('.config'), false);
+  });
+
+  test('rejects empty/null/undefined', () => {
+    assert.equal(S.isMacBundleDir(''), false);
+    assert.equal(S.isMacBundleDir(null), false);
+    assert.equal(S.isMacBundleDir(undefined), false);
+  });
+
+  test('rejects an extension that merely contains a known one as substring', () => {
+    // ".apple" should NOT match ".app" — this guards against a careless
+    // implementation using .includes() instead of an exact extension match
+    assert.equal(S.isMacBundleDir('Something.apple'), false);
+  });
+});
+
+// ─── decideEnterAction ────────────────────────────────────────────────────────
+
+describe('decideEnterAction', () => {
+  const entries = [
+    { path: '/p/Documents',   name: 'Documents',   type: 'dir' },
+    { path: '/p/My.Project',  name: 'My.Project',  type: 'dir' },
+    { path: '/p/Safari.app',  name: 'Safari.app',  type: 'dir' },
+    { path: '/p/photo.png',   name: 'photo.png',   type: 'file' },
+    { path: '/p/README',      name: 'README',      type: 'file' },
+    { path: '/p/.gitignore',  name: '.gitignore',  type: 'file' },
+    { path: '/p/link',        name: 'link',        type: 'symlink' },
+  ];
+
+  test('zero selection → none', () => {
+    assert.deepEqual(S.decideEnterAction([], entries, 'darwin'), { action: 'none', path: null });
+  });
+
+  test('multiple selection → none', () => {
+    assert.deepEqual(
+      S.decideEnterAction(['/p/Documents', '/p/photo.png'], entries, 'darwin'),
+      { action: 'none', path: null }
+    );
+  });
+
+  test('selected path not found in entries → none', () => {
+    assert.deepEqual(S.decideEnterAction(['/p/ghost'], entries, 'darwin'), { action: 'none', path: null });
+  });
+
+  test('regular folder → navigate', () => {
+    assert.deepEqual(
+      S.decideEnterAction(['/p/Documents'], entries, 'darwin'),
+      { action: 'navigate', path: '/p/Documents' }
+    );
+  });
+
+  test('dotted-but-not-a-bundle folder → navigate, even on macOS', () => {
+    assert.deepEqual(
+      S.decideEnterAction(['/p/My.Project'], entries, 'darwin'),
+      { action: 'navigate', path: '/p/My.Project' }
+    );
+  });
+
+  test('.app bundle on macOS → open', () => {
+    assert.deepEqual(
+      S.decideEnterAction(['/p/Safari.app'], entries, 'darwin'),
+      { action: 'open', path: '/p/Safari.app' }
+    );
+  });
+
+  test('.app bundle on a non-macOS platform → navigate (bundle rule is macOS-only)', () => {
+    assert.deepEqual(
+      S.decideEnterAction(['/p/Safari.app'], entries, 'other'),
+      { action: 'navigate', path: '/p/Safari.app' }
+    );
+    assert.deepEqual(
+      S.decideEnterAction(['/p/Safari.app'], entries, 'win32'),
+      { action: 'navigate', path: '/p/Safari.app' }
+    );
+  });
+
+  test('file with an extension → open, regardless of platform', () => {
+    assert.deepEqual(
+      S.decideEnterAction(['/p/photo.png'], entries, 'darwin'),
+      { action: 'open', path: '/p/photo.png' }
+    );
+    assert.deepEqual(
+      S.decideEnterAction(['/p/photo.png'], entries, 'other'),
+      { action: 'open', path: '/p/photo.png' }
+    );
+  });
+
+  test('file with no extension → none', () => {
+    assert.deepEqual(S.decideEnterAction(['/p/README'], entries, 'darwin'), { action: 'none', path: null });
+  });
+
+  test('dotfile (leading dot, no real extension) → none', () => {
+    assert.deepEqual(S.decideEnterAction(['/p/.gitignore'], entries, 'darwin'), { action: 'none', path: null });
+  });
+
+  test('symlink → none (consistent with existing double-click behaviour)', () => {
+    assert.deepEqual(S.decideEnterAction(['/p/link'], entries, 'darwin'), { action: 'none', path: null });
+  });
+});
+
 // ─── opConfirmMessage ────────────────────────────────────────────────────────
 
 describe('opConfirmMessage', () => {

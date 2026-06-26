@@ -77,6 +77,11 @@ async function refreshPanel(panel, pathOverride) {
     history:     updatedHistory[panel],
     volumes,
     config,
+    // The worker's actual OS — NOT a persisted preference, just a runtime
+    // fact the UI needs (e.g. to decide whether a folder is a macOS bundle).
+    // Deliberately kept separate from `config` since it isn't user-editable
+    // and shouldn't ever be written back to config.json.
+    platform: process.platform,
   };
 }
 

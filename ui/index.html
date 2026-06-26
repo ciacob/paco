@@ -365,7 +365,17 @@
       width: 16px; flex-shrink: 0;
       font-size: 11px; text-align: center;
       margin-right: 4px; color: var(--text3);
+      display: inline-flex; align-items: center; justify-content: center;
     }
+    .entry-spinner {
+      display: inline-block;
+      width: 11px; height: 11px;
+      border: 1.5px solid var(--border2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: paco-spin 0.7s linear infinite;
+    }
+    @keyframes paco-spin { to { transform: rotate(360deg); } }
     .entry-name {
       flex: 1; min-width: 0;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
