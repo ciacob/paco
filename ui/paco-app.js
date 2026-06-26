@@ -423,16 +423,17 @@
 
       row.addEventListener('click', e => {
         setActivePanel(side);
-        // Plain click selects/deselects this item exclusively (like TC).
-        // Ctrl/Cmd click toggles without clearing others.
+        // Plain click selects this item exclusively and stays selected on
+        // a repeat click (standard Explorer/Finder/TC behaviour) — it does
+        // NOT toggle off, since a second click of an already-selected item
+        // is also the first half of a double-click.
+        // Ctrl/Cmd click toggles this item without clearing others.
         // Shift click is reserved for range selection (future).
         if (e.ctrlKey || e.metaKey) {
           const newSel = S.toggleSelection(selArray(side), entry.path);
           selSets[side] = new Set(newSel);
         } else if (!e.shiftKey) {
-          // Plain click: toggle this item, clear all others
-          const wasSelected = selSets[side].has(entry.path);
-          selSets[side] = wasSelected ? new Set() : new Set([entry.path]);
+          selSets[side] = new Set([entry.path]);
         }
         renderList(side, appState.panels[side]);
         renderFkeys();
@@ -440,8 +441,7 @@
 
       row.addEventListener('dblclick', () => {
         setActivePanel(side);
-        if (entry.type === 'dir') navigate(side, entry.path);
-        // file open handled in future tasks
+        cmdEnterAction();
       });
 
       el.appendChild(row);
@@ -1169,7 +1169,7 @@
     }).catch(err => showError('Delete failed', err.message));
   }
 
-  // ─── Enter: open natively, or navigate into a regular folder ──────────────────
+  // ─── Enter / double-click: open natively, or navigate into a regular folder ───
 
   // True while any modal dialog is open, so the global Enter handler can
   // stay out of the way of dialogs' own Enter-to-confirm bindings (those
@@ -1187,6 +1187,9 @@
   // actual completion: there is no reliable "the app has opened" signal.
   const OPEN_SPINNER_MS = 2500;
 
+  // Shared by both the Enter key (see the document keydown handler below)
+  // and double-click on a row (see renderList) — same decision, same result,
+  // intentionally triggered identically by either gesture.
   function cmdEnterAction() {
     if (appState.busy) return;
     const side = appState.activePanel;
