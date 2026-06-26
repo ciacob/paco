@@ -349,6 +349,25 @@ function shortenPath(p) {
 }
 
 /**
+ * Compute the selection end index for pre-selecting a filename in a rename
+ * input — i.e. everything up to (but not including) the last dot, so the
+ * extension stays untouched while the user types the new base name.
+ *
+ * Dot files (a leading dot with nothing before it) get no special treatment:
+ * if the last dot is at position 0, or there is no dot at all, the selection
+ * is empty (0).
+ *
+ * @param {string} name
+ * @returns {number} index to use as the selection end (selection start is 0)
+ */
+function basenameSelectionEnd(name) {
+  if (!name) return 0;
+  const lastDot = name.lastIndexOf('.');
+  if (lastDot <= 0) return 0; // no dot, or dot is the very first character
+  return lastDot;
+}
+
+/**
  * Escape HTML special characters.
  * @param {string} str
  * @returns {string}
@@ -543,6 +562,7 @@ const uiState = {
   fmtSize,
   fmtDate,
   shortenPath,
+  basenameSelectionEnd,
   escHtml,
   fkeyEnabledState,
   canRename,

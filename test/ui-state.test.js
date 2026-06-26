@@ -570,6 +570,52 @@ describe('shortenPath', () => {
   test('windows path', ()          => assert.equal(S.shortenPath('C:\\Users\\foo'), 'foo'));
 });
 
+// ─── basenameSelectionEnd ─────────────────────────────────────────────────────
+
+describe('basenameSelectionEnd', () => {
+  test('simple extension: selects up to the dot', () => {
+    assert.equal(S.basenameSelectionEnd('photo.png'), 5);
+  });
+
+  test('multiple dots: stops at the LAST dot', () => {
+    assert.equal(S.basenameSelectionEnd('archive.tar.gz'), 11);
+  });
+
+  test('no dot at all: selects nothing', () => {
+    assert.equal(S.basenameSelectionEnd('README'), 0);
+  });
+
+  test('dot file (leading dot only): selects nothing', () => {
+    assert.equal(S.basenameSelectionEnd('.gitignore'), 0);
+  });
+
+  test('dot file with a second dot: last dot still wins (not position 0)', () => {
+    // '.tar.gz' -> lastIndexOf('.') is the second dot (index 4), which is > 0
+    assert.equal(S.basenameSelectionEnd('.tar.gz'), 4);
+  });
+
+  test('trailing dot: selects everything before it', () => {
+    assert.equal(S.basenameSelectionEnd('weird.'), 5);
+  });
+
+  test('empty string: selects nothing', () => {
+    assert.equal(S.basenameSelectionEnd(''), 0);
+  });
+
+  test('null/undefined: selects nothing', () => {
+    assert.equal(S.basenameSelectionEnd(null), 0);
+    assert.equal(S.basenameSelectionEnd(undefined), 0);
+  });
+
+  test('folder name with a dot is treated the same as a file', () => {
+    // basenameSelectionEnd has no concept of file vs folder — caller decides
+    // whether to even call it (e.g. only for files, or for both — by design
+    // here it always applies, since "dot files get no special treatment"
+    // only refers to a *leading* dot with nothing before it).
+    assert.equal(S.basenameSelectionEnd('my.folder'), 2);
+  });
+});
+
 // ─── escHtml ─────────────────────────────────────────────────────────────────
 
 describe('escHtml', () => {

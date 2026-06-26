@@ -595,6 +595,7 @@
     #rename-input:focus { outline: none; border-color: var(--accent2); }
     #rename-configure-phase { display: block; }
     #rename-configure-phase.hidden { display: none; }
+    #rename-configure-phase .copy-conflict-row { margin-bottom: 16px; }
     #rename-error-phase { display: none; }
     #rename-error-phase.visible { display: block; }
     #rename-error-msg {
@@ -605,6 +606,8 @@
       color: var(--text3); font-size: 11px; margin-top: 8px;
     }
     #rename-footer {
+      margin: 0 -22px -16px; padding: 10px 22px 16px;
+      border-top: 1px solid var(--border);
       display: flex; justify-content: flex-end; gap: 8px;
     }
 
@@ -759,7 +762,7 @@
     <button class="fkey" id="fk-view"  disabled><span class="fkey-label">F3</span><span class="fkey-name">View</span></button>
     <button class="fkey" id="fk-edit"  disabled><span class="fkey-label">F4</span><span class="fkey-name">Edit</span></button>
     <button class="fkey" id="fk-copy"  disabled><span class="fkey-label">F5</span><span class="fkey-name">Copy</span></button>
-    <button class="fkey" id="fk-rename" disabled><span class="fkey-label">\u21e7F6</span><span class="fkey-name">Rename</span></button>
+    <button class="fkey" id="fk-rename" disabled><span class="fkey-label">Shift+F6</span><span class="fkey-name">Rename</span></button>
     <button class="fkey" id="fk-move"  disabled><span class="fkey-label">F6</span><span class="fkey-name">Move</span></button>
     <button class="fkey" id="fk-mkdir"           ><span class="fkey-label">F7</span><span class="fkey-name">New Folder</span></button>
     <button class="fkey" id="fk-delete" disabled><span class="fkey-label">F8</span><span class="fkey-name">Delete</span></button>

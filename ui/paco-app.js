@@ -724,7 +724,11 @@
 
     _renamePhase('configure');
     renameDlg.bg.classList.add('visible');
-    setTimeout(() => { renameDlg.input.focus(); renameDlg.input.select(); }, 30);
+    setTimeout(() => {
+      renameDlg.input.focus();
+      const selEnd = S.basenameSelectionEnd(currentName);
+      renameDlg.input.setSelectionRange(0, selEnd);
+    }, 30);
 
     const newName = await new Promise(resolve => {
       const onCancel  = () => { cleanup(); resolve(null); };
