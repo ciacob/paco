@@ -807,6 +807,12 @@
     renameDlg.bg.classList.remove('visible');
   }
 
+  // Minimum time the F4 icon spinner stays visible, regardless of how fast
+  // the task itself settles. Without this, a fast MIME-sniff + spawn (the
+  // common case) can make the spinner flash for a barely-perceptible
+  // instant, which reads as a glitch rather than feedback.
+  const OPEN_WITH_SPINNER_MIN_MS = 1000;
+
   // ─── F4: open with… (file-handlers cascade) ──────────────────────────────────
 
   // F4 has no dialog of its own and no client-side way to predict the
@@ -819,9 +825,10 @@
   // The icon spinner is still shown, same visual as Enter's — but here it
   // is driven by the task's real start/end rather than a fixed timeout,
   // since F4 already has a genuine completion signal (the task settling)
-  // to clear it on. That signal still only means "the launch request was
-  // handled", same caveat as everywhere else in this file: we cannot know
-  // when the target application has actually finished opening.
+  // to clear it on, just with a floor under it so a very fast settle never
+  // reads as a flash/glitch. That signal still only means "the launch
+  // request was handled", same caveat as everywhere else in this file: we
+  // cannot know when the target application has actually finished opening.
   async function cmdOpenWith() {
     if (appState.busy) return;
     const side = appState.activePanel;
@@ -832,6 +839,7 @@
 
     appState = { ...appState, _spinningPath: targetPath };
     renderList(side, appState.panels[side]);
+    const spinnerStartedAt = Date.now();
 
     adapter.assign('worker/tasks/open-with.js', { path: targetPath }).catch(err => {
       if (appState._openWithResolve) {
@@ -844,6 +852,12 @@
     const outcome = await new Promise(resolve => {
       appState = { ...appState, _openWithResolve: resolve };
     });
+
+    // Enforce the minimum visible duration before clearing the spinner.
+    const elapsed = Date.now() - spinnerStartedAt;
+    if (elapsed < OPEN_WITH_SPINNER_MIN_MS) {
+      await new Promise(r => setTimeout(r, OPEN_WITH_SPINNER_MIN_MS - elapsed));
+    }
 
     // Only clear if this is still the spinner we set — avoids clobbering a
     // newer spin started by a second F4 press in the meantime (same guard
