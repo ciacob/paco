@@ -424,6 +424,27 @@ function canRename(selection, entries, busy) {
 }
 
 /**
+ * Determine whether the F4 "Open with…" command should be enabled.
+ * Same single-selection constraint as Rename, but additionally requires
+ * the selected item to be a file — F4's file-handlers cascade is about
+ * which application opens a file, which has no meaning for a directory.
+ * (Folders are navigated into, or — on macOS — opened as a bundle via
+ * Enter/double-click; neither of those is F4's concern.)
+ *
+ * @param {string[]} selection — selected paths
+ * @param {object[]} entries   — current panel's FsEntry[]
+ * @param {boolean}  busy
+ * @returns {boolean}
+ */
+function canOpenWith(selection, entries, busy) {
+  if (busy) return false;
+  if (selection.length !== 1) return false;
+  const entry = entries.find(e => e.path === selection[0]);
+  if (!entry) return false;
+  return entry.type === 'file';
+}
+
+/**
  * Build the header line for the rename dialog.
  * @param {string} currentName
  * @returns {string}
@@ -522,6 +543,115 @@ function decideEnterAction(selection, entries, platform) {
 
   // symlinks and anything else: no-op for now
   return { action: 'none', path: null };
+}
+
+// ─── File handlers (F4) ─────────────────────────────────────────────────────────
+
+/**
+ * MIME-category buckets, in the order they're documented (not significant
+ * for matching — category lookup is a direct key access, not a cascade).
+ */
+const FILE_CATEGORIES = ['text', 'audio', 'image', 'video', 'other'];
+
+/**
+ * Classify a detected MIME type (or the absence of one) into one of the
+ * category buckets used by file-handlers.json's "category" tier.
+ *
+ * `file-type` only detects binary signatures and returns no match at all
+ * for text-based formats — that absence, combined with a separate content
+ * sniff for "does this look like text", is what tells the two apart here.
+ * This function does no I/O itself; the content sniff result is passed in.
+ *
+ * @param {string|null} mime        — MIME type from file-type, or null/undefined if no match
+ * @param {boolean}     looksTextual — result of a separate binary-vs-text content sniff,
+ *                                     only consulted when mime is null/undefined
+ * @returns {'text'|'audio'|'image'|'video'|'other'}
+ */
+function classifyMime(mime, looksTextual) {
+  if (!mime) {
+    return looksTextual ? 'text' : 'other';
+  }
+  if (mime.startsWith('text/'))  return 'text';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  return 'other';
+}
+
+/**
+ * Normalise a file name's extension for matching against file-handlers.json
+ * — lower-cased, includes the leading dot, '' if there is none (or it's a
+ * leading dot-file with nothing before it, consistent with the rule used
+ * elsewhere in this module).
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+function extOf(name) {
+  if (!name) return '';
+  const lastDot = name.lastIndexOf('.');
+  if (lastDot <= 0) return '';
+  return name.slice(lastDot).toLowerCase();
+}
+
+/**
+ * Resolve which handler (if any) should open a file, per the three-tier
+ * cascade described in file-handlers.json:
+ *
+ *   1. specific  — array of { extensions, handler }, first match wins
+ *   2. category  — one of text/audio/image/video/other, by detected MIME
+ *   3. fallback  — 'nativeOpen' | 'lister' | null, the terminal step
+ *
+ * Tiers 1 and 2 apply identically regardless of whether the file is
+ * executable — only the terminal fallback step branches on that, via
+ * `exec_fallback` instead of `fallback`, and `exec_fallback` may never be
+ * 'nativeOpen' (that is the exact case this whole gate exists to prevent).
+ *
+ * This function is pure: all inputs (config, name, mime, sniff result,
+ * executable check) are supplied by the caller, which owns the actual I/O
+ * (file-type detection, content sniffing, fs.access/PATHEXT check).
+ *
+ * @param {object}      config        — parsed file-handlers.json
+ * @param {string}      name          — file's basename
+ * @param {string|null} mime          — file-type's detected MIME, or null
+ * @param {boolean}     looksTextual  — content-sniff result, used only if mime is null
+ * @param {boolean}     isExecutable  — result of the platform-appropriate executable check
+ * @returns {{ action: 'open'|'nativeOpen'|'lister'|'none', app?: string, args?: string[] }}
+ */
+function resolveFileHandler(config, name, mime, looksTextual, isExecutable) {
+  const cfg = config || {};
+  const ext = extOf(name);
+
+  // Tier 1 — specific extension match, first entry wins
+  const specificList = Array.isArray(cfg.specific) ? cfg.specific : [];
+  for (const entry of specificList) {
+    const extensions = (entry && Array.isArray(entry.extensions)) ? entry.extensions : [];
+    if (extensions.some(e => String(e).toLowerCase() === ext)) {
+      const handler = entry.handler || {};
+      return { action: 'open', app: handler.app, args: handler.args || [] };
+    }
+  }
+
+  // Tier 2 — category match
+  const category = classifyMime(mime, looksTextual);
+  const categoryHandler = cfg.category ? cfg.category[category] : null;
+  if (categoryHandler && categoryHandler.app) {
+    return { action: 'open', app: categoryHandler.app, args: categoryHandler.args || [] };
+  }
+
+  // Tier 3 — terminal fallback, branching on the executable gate
+  if (isExecutable) {
+    const execFallback = cfg.exec_fallback || null;
+    // 'nativeOpen' is never a legal value here, even if misconfigured —
+    // the whole point of this gate is to prevent that exact outcome.
+    if (execFallback === 'lister') return { action: 'lister' };
+    return { action: 'none' };
+  }
+
+  const fallback = cfg.fallback === undefined ? 'nativeOpen' : cfg.fallback;
+  if (fallback === 'nativeOpen') return { action: 'nativeOpen' };
+  if (fallback === 'lister')     return { action: 'lister' };
+  return { action: 'none' };
 }
 
 /**
@@ -651,10 +781,14 @@ const uiState = {
   escHtml,
   fkeyEnabledState,
   canRename,
+  canOpenWith,
   renameDialogHeader,
   renameErrorMessage,
   isMacBundleDir,
   decideEnterAction,
+  classifyMime,
+  extOf,
+  resolveFileHandler,
   opConfirmMessage,
   copyDialogHeader,
   copyReport,

@@ -28,10 +28,11 @@ const os   = require('os');
 const PACO_DIR = path.join(os.homedir(), '.paco');
 
 const PATHS = {
-  state:      path.join(PACO_DIR, 'state.json'),
-  history:    path.join(PACO_DIR, 'history.json'),
-  operations: path.join(PACO_DIR, 'operations.json'),
-  config:     path.join(PACO_DIR, 'config.json'),
+  state:        path.join(PACO_DIR, 'state.json'),
+  history:      path.join(PACO_DIR, 'history.json'),
+  operations:   path.join(PACO_DIR, 'operations.json'),
+  config:       path.join(PACO_DIR, 'config.json'),
+  fileHandlers: path.join(PACO_DIR, 'file-handlers.json'),
 };
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
@@ -66,6 +67,36 @@ const DEFAULT_HISTORY = {
 
 const DEFAULT_OPERATIONS = {
   operations: [],
+};
+
+// F4 file-handlers cascade: specific extensions → MIME category → fallback.
+// See paco/ui-state.js's resolveFileHandler() for how this is consulted.
+const DEFAULT_FILE_HANDLERS = {
+  // 'nativeOpen' | 'lister' | null — terminal step for non-executable files
+  // with no specific or category match. Defaults to today's native-open
+  // behaviour so existing installs see no change until they configure this.
+  fallback: 'nativeOpen',
+
+  // 'lister' | null — terminal step for EXECUTABLE files specifically.
+  // Deliberately excludes 'nativeOpen': F4 must never hand an executable
+  // to the OS to run. Defaults to null (no-op) until F3 (the read-only
+  // lister) exists to act as a safe fallback.
+  exec_fallback: null,
+
+  // Many-extensions-to-one-handler. First match wins. Applies regardless
+  // of the executable bit — a specific match is always respected.
+  specific: [],
+
+  // One handler per MIME-ish bucket. Any entry may be null (falls through
+  // to the fallback/exec_fallback step). Applies regardless of the
+  // executable bit, same as `specific`.
+  category: {
+    text:  null,
+    audio: null,
+    image: null,
+    video: null,
+    other: null,
+  },
 };
 
 const DEFAULT_CONFIG = {
@@ -118,10 +149,11 @@ function bootstrap() {
     fs.mkdirSync(PACO_DIR, { recursive: true });
   }
 
-  _ensureFile(PATHS.state,      DEFAULT_STATE);
-  _ensureFile(PATHS.history,    DEFAULT_HISTORY);
-  _ensureFile(PATHS.operations, DEFAULT_OPERATIONS);
-  _ensureFile(PATHS.config,     DEFAULT_CONFIG);
+  _ensureFile(PATHS.state,        DEFAULT_STATE);
+  _ensureFile(PATHS.history,      DEFAULT_HISTORY);
+  _ensureFile(PATHS.operations,   DEFAULT_OPERATIONS);
+  _ensureFile(PATHS.config,       DEFAULT_CONFIG);
+  _ensureFile(PATHS.fileHandlers, DEFAULT_FILE_HANDLERS);
 
   // Migrate stale state: reset tabs if state version is missing or outdated.
   // This clears accumulated ghost tabs from pre-versioned sessions.
@@ -228,6 +260,30 @@ function writeOperations(ops) {
   _write(PATHS.operations, ops);
 }
 
+// ─── File handlers (F4) ─────────────────────────────────────────────────────────
+
+/**
+ * Read the F4 file-handlers cascade config. Merges shallowly against
+ * defaults so a config file from an older version (missing e.g.
+ * `exec_fallback`) still gets a safe default for the missing key, the
+ * same way readConfig() does for config.json.
+ */
+function readFileHandlers() {
+  const stored = _read(PATHS.fileHandlers, {});
+  return Object.assign({}, DEFAULT_FILE_HANDLERS, stored, {
+    category: Object.assign({}, DEFAULT_FILE_HANDLERS.category, stored.category || {}),
+  });
+}
+
+function writeFileHandlers(fileHandlers) {
+  _write(PATHS.fileHandlers, fileHandlers);
+}
+
+function updateFileHandlers(updates) {
+  const current = readFileHandlers();
+  _write(PATHS.fileHandlers, Object.assign({}, current, updates));
+}
+
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 function readConfig() {
@@ -263,6 +319,10 @@ module.exports = {
 
   readOperations,
   writeOperations,
+
+  readFileHandlers,
+  writeFileHandlers,
+  updateFileHandlers,
 
   readConfig,
   writeConfig,

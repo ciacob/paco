@@ -1249,6 +1249,252 @@ describe('open-native task', () => {
   });
 });
 
+// ─── open-with task (F4) ──────────────────────────────────────────────────────
+
+describe('open-with task', () => {
+  function freshContext() {
+    purgeCache('paco/context');
+    return require('../paco/context');
+  }
+
+  test('tier 1: specific extension match opens with the configured app', async () => {
+    const target = path.join(workDir, 'cover.psd');
+    await mkfile(target, 'fake psd content');
+
+    const ctx2 = freshContext();
+    ctx2.writeFileHandlers({
+      fallback: 'nativeOpen', exec_fallback: null,
+      specific: [{ extensions: ['.psd'], handler: { app: 'Photoshop', args: ['--silent'] } }],
+      category: { text: null, audio: null, image: null, video: null, other: null },
+    });
+
+    let calledWith = null;
+    const restore = stubOpenModule(async (p, opts) => { calledWith = { p, opts }; });
+    purgeCache('worker/tasks/open-with');
+    purgeCache('paco/ui-state');
+    purgeCache('paco/file-handler-detect');
+
+    const task = require('../worker/tasks/open-with');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    restore();
+
+    assert.ok(ok, result && result.error);
+    assert.equal(result.action, 'open');
+    assert.equal(result.app, 'Photoshop');
+    assert.equal(calledWith.p, target);
+    assert.deepEqual(calledWith.opts, { app: { name: 'Photoshop', arguments: ['--silent'] } });
+  });
+
+  test('tier 2: category match used for a real PNG with no specific match', async () => {
+    const target = path.join(workDir, 'photo.png');
+    const pngSig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await fsp.writeFile(target, Buffer.concat([pngSig, Buffer.alloc(20)]));
+
+    const ctx2 = freshContext();
+    ctx2.writeFileHandlers({
+      fallback: 'nativeOpen', exec_fallback: null,
+      specific: [],
+      category: { text: null, audio: null, image: { app: 'Preview', args: [] }, video: null, other: null },
+    });
+
+    let calledWith = null;
+    const restore = stubOpenModule(async (p, opts) => { calledWith = { p, opts }; });
+    purgeCache('worker/tasks/open-with');
+    purgeCache('paco/ui-state');
+    purgeCache('paco/file-handler-detect');
+
+    const task = require('../worker/tasks/open-with');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    restore();
+
+    assert.ok(ok, result && result.error);
+    assert.equal(result.action, 'open');
+    assert.equal(result.app, 'Preview');
+    assert.equal(calledWith.opts.app.name, 'Preview');
+  });
+
+  test('tier 3: falls through to nativeOpen for an unmatched non-executable file', async () => {
+    const target = path.join(workDir, 'mystery.xyz');
+    await mkfile(target, 'plain text content, no signature, no category match');
+
+    const ctx2 = freshContext();
+    ctx2.writeFileHandlers({
+      fallback: 'nativeOpen', exec_fallback: null,
+      specific: [],
+      category: { text: null, audio: null, image: null, video: null, other: null },
+    });
+
+    let calledPlain = null;
+    const restore = stubOpenModule(async (p, opts) => { calledPlain = { p, opts }; });
+    purgeCache('worker/tasks/open-with');
+    purgeCache('paco/ui-state');
+    purgeCache('paco/file-handler-detect');
+
+    const task = require('../worker/tasks/open-with');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    restore();
+
+    assert.ok(ok, result && result.error);
+    assert.equal(result.action, 'nativeOpen');
+    assert.equal(calledPlain.p, target);
+    assert.equal(calledPlain.opts, undefined); // plain open(), no app option
+  });
+
+  test('executable gate: never calls nativeOpen on an executable file, even with fallback=nativeOpen',
+    { skip: process.platform === 'win32' }, async () => {
+      const target = path.join(workDir, 'run.sh');
+      await mkfile(target, '#!/bin/sh\necho hi\n');
+      await fsp.chmod(target, 0o755);
+
+      const ctx2 = freshContext();
+      ctx2.writeFileHandlers({
+        fallback: 'nativeOpen', exec_fallback: null,
+        specific: [], category: { text: null, audio: null, image: null, video: null, other: null },
+      });
+
+      let openWasCalled = false;
+      const restore = stubOpenModule(async () => { openWasCalled = true; });
+      purgeCache('worker/tasks/open-with');
+      purgeCache('paco/ui-state');
+      purgeCache('paco/file-handler-detect');
+
+      const task = require('../worker/tasks/open-with');
+      const { ctx, promise } = makeCtx({ path: target });
+      task.start(ctx);
+      const { ok, result } = await promise;
+
+      restore();
+
+      assert.ok(ok, result && result.error);
+      assert.equal(result.action, 'none');
+      assert.equal(result.opened, false);
+      assert.equal(openWasCalled, false, 'open() must never be called for an executable falling through to fallback');
+    });
+
+  test('executable gate: exec_fallback=lister produces a lister result without calling open()',
+    { skip: process.platform === 'win32' }, async () => {
+      const target = path.join(workDir, 'run2.sh');
+      await mkfile(target, '#!/bin/sh\necho hi\n');
+      await fsp.chmod(target, 0o755);
+
+      const ctx2 = freshContext();
+      ctx2.writeFileHandlers({
+        fallback: 'nativeOpen', exec_fallback: 'lister',
+        specific: [], category: { text: null, audio: null, image: null, video: null, other: null },
+      });
+
+      let openWasCalled = false;
+      const restore = stubOpenModule(async () => { openWasCalled = true; });
+      purgeCache('worker/tasks/open-with');
+      purgeCache('paco/ui-state');
+      purgeCache('paco/file-handler-detect');
+
+      const task = require('../worker/tasks/open-with');
+      const { ctx, promise } = makeCtx({ path: target });
+      task.start(ctx);
+      const { ok, result } = await promise;
+
+      restore();
+
+      assert.ok(ok, result && result.error);
+      assert.equal(result.action, 'lister');
+      assert.equal(openWasCalled, false);
+    });
+
+  test('fails when no path is given', async () => {
+    purgeCache('worker/tasks/open-with');
+    const task = require('../worker/tasks/open-with');
+    const { ctx, promise } = makeCtx({ path: '' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no file specified/i);
+  });
+
+  test('fails when the target no longer exists', async () => {
+    purgeCache('worker/tasks/open-with');
+    const task = require('../worker/tasks/open-with');
+    const { ctx, promise } = makeCtx({ path: path.join(workDir, 'ghost-f4.txt') });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no longer exists/i);
+  });
+
+  test('fails when the target is a directory', async () => {
+    const target = path.join(workDir, 'a-folder');
+    await fsp.mkdir(target);
+    purgeCache('worker/tasks/open-with');
+    const task = require('../worker/tasks/open-with');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /only applies to files/i);
+  });
+
+  test('fails with a clear message when open() itself throws', async () => {
+    const target = path.join(workDir, 'boom.xyz');
+    await mkfile(target, 'plain text');
+
+    const ctx2 = freshContext();
+    ctx2.writeFileHandlers({
+      fallback: 'nativeOpen', exec_fallback: null,
+      specific: [], category: { text: null, audio: null, image: null, video: null, other: null },
+    });
+
+    const restore = stubOpenModule(async () => { throw new Error('spawn ENOENT'); });
+    purgeCache('worker/tasks/open-with');
+    purgeCache('paco/ui-state');
+    purgeCache('paco/file-handler-detect');
+
+    const task = require('../worker/tasks/open-with');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, error } = await promise;
+
+    restore();
+
+    assert.ok(!ok);
+    assert.match(error, /could not open/i);
+  });
+
+  test('reports progress through the operation', async () => {
+    const target = path.join(workDir, 'prog.xyz');
+    await mkfile(target, 'plain text');
+
+    const ctx2 = freshContext();
+    ctx2.writeFileHandlers({
+      fallback: 'nativeOpen', exec_fallback: null,
+      specific: [], category: { text: null, audio: null, image: null, video: null, other: null },
+    });
+
+    const restore = stubOpenModule(async () => {});
+    purgeCache('worker/tasks/open-with');
+    purgeCache('paco/ui-state');
+    purgeCache('paco/file-handler-detect');
+
+    const task = require('../worker/tasks/open-with');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { progressLog } = await promise;
+
+    restore();
+
+    assert.ok(progressLog.length >= 2);
+    assert.equal(progressLog[progressLog.length - 1].pct, 100);
+  });
+});
+
 // ─── navigate task ────────────────────────────────────────────────────────────
 
 describe('navigate task', () => {

@@ -175,6 +175,15 @@
         resolve({ ok: true });
       }
 
+      // F4 "Open with…" completion — unlike mkdir/rename, the result payload
+      // itself matters (action: 'open'|'nativeOpen'|'lister'|'none'), so it's
+      // forwarded as-is rather than collapsed to a bare { ok: true }.
+      if (appState._openWithResolve) {
+        const resolve = appState._openWithResolve;
+        appState = { ...appState, _openWithResolve: null };
+        resolve({ ok: true, result });
+      }
+
       // Continue draining watch queue if more panels need refreshing
       if (appState._watchQueue && appState._watchQueue.length > 0) {
         adapter.reset().then(() => _drainWatchQueue()).catch(() => {});
@@ -215,6 +224,10 @@
           } else if (renameDlg._resultResolve) {
             const resolve = renameDlg._resultResolve;
             renameDlg._resultResolve = null;
+            resolve({ ok: false, error: errMsg || 'Unknown error' });
+          } else if (appState._openWithResolve) {
+            const resolve = appState._openWithResolve;
+            appState = { ...appState, _openWithResolve: null };
             resolve({ ok: false, error: errMsg || 'Unknown error' });
           } else {
             showError('Error', errMsg || 'Unknown error');
@@ -466,12 +479,12 @@
     const sel     = selArray(side);
     const enabled = S.fkeyEnabledState(sel, appState.busy);
     dom.fkView.disabled   = !enabled.view;
-    dom.fkEdit.disabled   = !enabled.edit;
     dom.fkCopy.disabled   = !enabled.copy;
     dom.fkMove.disabled   = !enabled.move;
     dom.fkMkdir.disabled  = !enabled.mkdir;
     dom.fkDelete.disabled = !enabled.delete;
     dom.fkRename.disabled = !S.canRename(sel, appState.panels[side].entries, appState.busy);
+    dom.fkEdit.disabled   = !S.canOpenWith(sel, appState.panels[side].entries, appState.busy);
   }
 
   function setActivePanel(side) {
@@ -792,6 +805,68 @@
       renameDlg.cancelBtn.addEventListener('click', onClose);
     });
     renameDlg.bg.classList.remove('visible');
+  }
+
+  // ─── F4: open with… (file-handlers cascade) ──────────────────────────────────
+
+  // F4 has no dialog of its own and no client-side way to predict the
+  // outcome (the cascade decision depends on server-side MIME detection),
+  // so unlike Enter/double-click it can't optimistically spin an icon
+  // before knowing what will happen. It goes through the normal busy-bar
+  // and progress-message machinery instead, which already shows exactly
+  // what the task is doing at each step.
+  //
+  // The icon spinner is still shown, same visual as Enter's — but here it
+  // is driven by the task's real start/end rather than a fixed timeout,
+  // since F4 already has a genuine completion signal (the task settling)
+  // to clear it on. That signal still only means "the launch request was
+  // handled", same caveat as everywhere else in this file: we cannot know
+  // when the target application has actually finished opening.
+  async function cmdOpenWith() {
+    if (appState.busy) return;
+    const side = appState.activePanel;
+    const sel  = selArray(side);
+    if (!S.canOpenWith(sel, appState.panels[side].entries, appState.busy)) return;
+
+    const targetPath = sel[0];
+
+    appState = { ...appState, _spinningPath: targetPath };
+    renderList(side, appState.panels[side]);
+
+    adapter.assign('worker/tasks/open-with.js', { path: targetPath }).catch(err => {
+      if (appState._openWithResolve) {
+        const resolve = appState._openWithResolve;
+        appState = { ...appState, _openWithResolve: null };
+        resolve({ ok: false, error: err.message });
+      }
+    });
+
+    const outcome = await new Promise(resolve => {
+      appState = { ...appState, _openWithResolve: resolve };
+    });
+
+    // Only clear if this is still the spinner we set — avoids clobbering a
+    // newer spin started by a second F4 press in the meantime (same guard
+    // used for Enter's spinner).
+    if (appState._spinningPath === targetPath) {
+      appState = { ...appState, _spinningPath: null };
+      renderList(side, appState.panels[side]);
+    }
+
+    if (!outcome.ok) {
+      showError('Could not open', outcome.error || 'Unknown error');
+      return;
+    }
+
+    const action = outcome.result && outcome.result.action;
+    if (action === 'lister') {
+      showError('Coming soon', 'A read-only viewer (F3) is not yet available to fall back to.');
+    } else if (action === 'none') {
+      // No handler configured for this file, and no executable-safe
+      // fallback either — a deliberate, silent no-op, not an error.
+    }
+    // 'open' and 'nativeOpen' need no further UI action — the OS app
+    // appearing on screen is the feedback.
   }
 
   // ─── Copy dialog (three-phase) ───────────────────────────────────────────────
@@ -1238,6 +1313,7 @@
     const side  = appState.activePanel;
     const other = side === 'left' ? 'right' : 'left';
     if (e.key === 'F2')                              { e.preventDefault(); refreshBoth(); }
+    else if (e.key === 'F4')                         { e.preventDefault(); cmdOpenWith(); }
     else if (e.key === 'F5')                         { e.preventDefault(); cmdCopy(); }
     else if (e.key === 'F6' && e.shiftKey)           { e.preventDefault(); cmdRename(); }
     else if (e.key === 'F6')                         { e.preventDefault(); cmdMove(); }
@@ -1260,7 +1336,7 @@
   });
 
   dom.fkView.addEventListener('click',   () => showError('Coming soon', 'View not yet implemented'));
-  dom.fkEdit.addEventListener('click',   () => showError('Coming soon', 'Edit not yet implemented'));
+  dom.fkEdit.addEventListener('click',   cmdOpenWith);
   dom.fkCopy.addEventListener('click',   cmdCopy);
   dom.fkRename.addEventListener('click', cmdRename);
   dom.fkMove.addEventListener('click',   cmdMove);

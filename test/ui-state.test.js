@@ -693,6 +693,44 @@ describe('canRename', () => {
   });
 });
 
+// ─── canOpenWith ──────────────────────────────────────────────────────────────
+
+describe('canOpenWith', () => {
+  const entries = [
+    { path: '/a/file.txt', type: 'file' },
+    { path: '/a/folder',   type: 'dir' },
+    { path: '/a/link',     type: 'symlink' },
+  ];
+
+  test('false when busy', () => {
+    assert.equal(S.canOpenWith(['/a/file.txt'], entries, true), false);
+  });
+
+  test('false when no selection', () => {
+    assert.equal(S.canOpenWith([], entries, false), false);
+  });
+
+  test('false when multiple selected', () => {
+    assert.equal(S.canOpenWith(['/a/file.txt', '/a/folder'], entries, false), false);
+  });
+
+  test('true for a single file', () => {
+    assert.equal(S.canOpenWith(['/a/file.txt'], entries, false), true);
+  });
+
+  test('false for a single folder — F4 has no meaning for directories', () => {
+    assert.equal(S.canOpenWith(['/a/folder'], entries, false), false);
+  });
+
+  test('false for a symlink (consistent with other entry-type gates in this module)', () => {
+    assert.equal(S.canOpenWith(['/a/link'], entries, false), false);
+  });
+
+  test('false when selected path is not found in entries', () => {
+    assert.equal(S.canOpenWith(['/a/missing.txt'], entries, false), false);
+  });
+});
+
 // ─── renameDialogHeader / renameErrorMessage ─────────────────────────────────
 
 describe('renameDialogHeader', () => {
@@ -836,6 +874,200 @@ describe('decideEnterAction', () => {
 
   test('symlink → none (consistent with existing double-click behaviour)', () => {
     assert.deepEqual(S.decideEnterAction(['/p/link'], entries, 'darwin'), { action: 'none', path: null });
+  });
+});
+
+// ─── classifyMime ─────────────────────────────────────────────────────────────
+
+describe('classifyMime', () => {
+  test('text/* → text', () => {
+    assert.equal(S.classifyMime('text/html', false), 'text');
+    assert.equal(S.classifyMime('text/plain', false), 'text');
+  });
+
+  test('audio/* → audio', () => {
+    assert.equal(S.classifyMime('audio/mpeg', false), 'audio');
+  });
+
+  test('image/* → image', () => {
+    assert.equal(S.classifyMime('image/png', false), 'image');
+  });
+
+  test('video/* → video', () => {
+    assert.equal(S.classifyMime('video/mp4', false), 'video');
+  });
+
+  test('an unrecognised MIME prefix → other', () => {
+    assert.equal(S.classifyMime('application/pdf', false), 'other');
+    assert.equal(S.classifyMime('application/zip', false), 'other');
+  });
+
+  test('null mime + looksTextual=true → text (the file-type-has-no-signature case)', () => {
+    assert.equal(S.classifyMime(null, true), 'text');
+  });
+
+  test('null mime + looksTextual=false → other', () => {
+    assert.equal(S.classifyMime(null, false), 'other');
+  });
+
+  test('undefined mime is treated the same as null', () => {
+    assert.equal(S.classifyMime(undefined, true), 'text');
+    assert.equal(S.classifyMime(undefined, false), 'other');
+  });
+});
+
+// ─── extOf ────────────────────────────────────────────────────────────────────
+
+describe('extOf', () => {
+  test('returns the lower-cased extension including the dot', () => {
+    assert.equal(S.extOf('Photo.PNG'), '.png');
+    assert.equal(S.extOf('archive.tar.gz'), '.gz');
+  });
+
+  test('no extension → empty string', () => {
+    assert.equal(S.extOf('README'), '');
+  });
+
+  test('dot file with nothing before the dot → empty string', () => {
+    assert.equal(S.extOf('.gitignore'), '');
+  });
+
+  test('empty/null/undefined → empty string', () => {
+    assert.equal(S.extOf(''), '');
+    assert.equal(S.extOf(null), '');
+    assert.equal(S.extOf(undefined), '');
+  });
+});
+
+// ─── resolveFileHandler ───────────────────────────────────────────────────────
+
+describe('resolveFileHandler', () => {
+  function makeConfig(overrides = {}) {
+    return Object.assign({
+      fallback: 'nativeOpen',
+      exec_fallback: null,
+      specific: [],
+      category: { text: null, audio: null, image: null, video: null, other: null },
+    }, overrides);
+  }
+
+  test('tier 1: specific extension match wins, even with a category handler set', () => {
+    const config = makeConfig({
+      specific: [{ extensions: ['.psd', '.ai'], handler: { app: 'Photoshop', args: ['--silent'] } }],
+      category: { image: { app: 'Preview', args: [] }, text: null, audio: null, video: null, other: null },
+    });
+    const r = S.resolveFileHandler(config, 'cover.psd', 'image/vnd.adobe.photoshop', false, false);
+    assert.deepEqual(r, { action: 'open', app: 'Photoshop', args: ['--silent'] });
+  });
+
+  test('tier 1 match is case-insensitive on the extension', () => {
+    const config = makeConfig({
+      specific: [{ extensions: ['.psd'], handler: { app: 'Photoshop' } }],
+    });
+    const r = S.resolveFileHandler(config, 'cover.PSD', null, false, false);
+    assert.equal(r.action, 'open');
+    assert.equal(r.app, 'Photoshop');
+  });
+
+  test('tier 1 handler with no args defaults to an empty array', () => {
+    const config = makeConfig({
+      specific: [{ extensions: ['.txt'], handler: { app: 'Notepad' } }],
+    });
+    const r = S.resolveFileHandler(config, 'a.txt', null, true, false);
+    assert.deepEqual(r.args, []);
+  });
+
+  test('tier 2: category match used when no specific match exists', () => {
+    const config = makeConfig({
+      category: { image: { app: 'Preview', args: [] }, text: null, audio: null, video: null, other: null },
+    });
+    const r = S.resolveFileHandler(config, 'photo.png', 'image/png', false, false);
+    assert.deepEqual(r, { action: 'open', app: 'Preview', args: [] });
+  });
+
+  test('tier 2 falls through to fallback when the matched category is null', () => {
+    const config = makeConfig({ fallback: 'nativeOpen' });
+    const r = S.resolveFileHandler(config, 'photo.png', 'image/png', false, false);
+    assert.equal(r.action, 'nativeOpen');
+  });
+
+  test('tier 2 routes a no-signature, textual file into the text bucket', () => {
+    const config = makeConfig({
+      category: { text: { app: 'TextEdit', args: [] }, audio: null, image: null, video: null, other: null },
+    });
+    const r = S.resolveFileHandler(config, 'notes.md', null, true, false);
+    assert.deepEqual(r, { action: 'open', app: 'TextEdit', args: [] });
+  });
+
+  test('tier 3: fallback nativeOpen, non-executable file', () => {
+    const config = makeConfig({ fallback: 'nativeOpen' });
+    const r = S.resolveFileHandler(config, 'whatever.xyz', null, false, false);
+    assert.deepEqual(r, { action: 'nativeOpen' });
+  });
+
+  test('tier 3: fallback lister', () => {
+    const config = makeConfig({ fallback: 'lister' });
+    const r = S.resolveFileHandler(config, 'whatever.xyz', null, false, false);
+    assert.deepEqual(r, { action: 'lister' });
+  });
+
+  test('tier 3: fallback null → none', () => {
+    const config = makeConfig({ fallback: null });
+    const r = S.resolveFileHandler(config, 'whatever.xyz', null, false, false);
+    assert.deepEqual(r, { action: 'none' });
+  });
+
+  test('tier 3: missing fallback key defaults to nativeOpen', () => {
+    const config = { specific: [], category: { text: null, audio: null, image: null, video: null, other: null } };
+    const r = S.resolveFileHandler(config, 'whatever.xyz', null, false, false);
+    assert.deepEqual(r, { action: 'nativeOpen' });
+  });
+
+  test('executable gate: nativeOpen fallback is REPLACED by exec_fallback for an executable file', () => {
+    const config = makeConfig({ fallback: 'nativeOpen', exec_fallback: null });
+    const r = S.resolveFileHandler(config, 'installer.sh', null, false, true);
+    assert.deepEqual(r, { action: 'none' }); // never nativeOpen, even though fallback says so
+  });
+
+  test('executable gate: exec_fallback lister is honoured', () => {
+    const config = makeConfig({ fallback: 'nativeOpen', exec_fallback: 'lister' });
+    const r = S.resolveFileHandler(config, 'installer.sh', null, false, true);
+    assert.deepEqual(r, { action: 'lister' });
+  });
+
+  test('executable gate: a misconfigured exec_fallback of "nativeOpen" is still refused', () => {
+    const config = makeConfig({ exec_fallback: 'nativeOpen' });
+    const r = S.resolveFileHandler(config, 'installer.sh', null, false, true);
+    assert.notEqual(r.action, 'nativeOpen');
+    assert.deepEqual(r, { action: 'none' });
+  });
+
+  test('executable gate does NOT block a specific-tier match', () => {
+    const config = makeConfig({
+      specific: [{ extensions: ['.sh'], handler: { app: 'BBEdit', args: [] } }],
+      exec_fallback: null,
+    });
+    const r = S.resolveFileHandler(config, 'installer.sh', null, false, true);
+    assert.deepEqual(r, { action: 'open', app: 'BBEdit', args: [] });
+  });
+
+  test('executable gate does NOT block a category-tier match', () => {
+    const config = makeConfig({
+      category: { text: { app: 'BBEdit', args: [] }, audio: null, image: null, video: null, other: null },
+      exec_fallback: null,
+    });
+    const r = S.resolveFileHandler(config, 'installer.sh', null, true, true);
+    assert.deepEqual(r, { action: 'open', app: 'BBEdit', args: [] });
+  });
+
+  test('missing/empty config object defaults sensibly (nativeOpen, non-executable)', () => {
+    const r = S.resolveFileHandler(undefined, 'whatever.xyz', null, false, false);
+    assert.deepEqual(r, { action: 'nativeOpen' });
+  });
+
+  test('missing/empty config object, executable → none, never nativeOpen', () => {
+    const r = S.resolveFileHandler({}, 'whatever.sh', null, false, true);
+    assert.deepEqual(r, { action: 'none' });
   });
 });
 
