@@ -107,10 +107,6 @@ module.exports = {
       // typeMismatchMessage doc comment for the full reasoning. This check
       // runs before conflictFiles/conflictFolders are even consulted, the
       // same way copy-engine.js handles the equivalent case for copy/move.
-      // Type mismatch is never a strategy decision — see paco/ui-state.js's
-      // typeMismatchMessage doc comment for the full reasoning. This check
-      // runs before conflictFiles/conflictFolders are even consulted, the
-      // same way copy-engine.js handles the equivalent case for copy/move.
       // The check is dir-vs-non-dir, matching the only distinction the rest
       // of this function actually makes (a symlink colliding with another
       // symlink, for instance, is a same-"kind" collision for our purposes
