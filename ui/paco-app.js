@@ -629,8 +629,8 @@
   });
 
   mkdirDlg.input.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  { e.preventDefault(); mkdirDlg.createBtn.click(); }
-    if (e.key === 'Escape') { e.preventDefault(); mkdirDlg.cancelBtn.click(); }
+    if (e.key === 'Enter')  { e.preventDefault(); e.stopPropagation(); mkdirDlg.createBtn.click(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); mkdirDlg.cancelBtn.click(); }
   });
 
   async function cmdMkdir() {
@@ -721,12 +721,12 @@
   }
 
   createFileDlg.bg.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { e.preventDefault(); createFileDlg.cancelBtn.click(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); createFileDlg.cancelBtn.click(); }
   });
 
   createFileDlg.input.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  { e.preventDefault(); createFileDlg.confirmBtn.click(); }
-    if (e.key === 'Escape') { e.preventDefault(); createFileDlg.cancelBtn.click(); }
+    if (e.key === 'Enter')  { e.preventDefault(); e.stopPropagation(); createFileDlg.confirmBtn.click(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); createFileDlg.cancelBtn.click(); }
   });
 
   async function cmdCreateFile() {
@@ -822,12 +822,12 @@
   }
 
   renameDlg.bg.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { e.preventDefault(); renameDlg.cancelBtn.click(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); renameDlg.cancelBtn.click(); }
   });
 
   renameDlg.input.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  { e.preventDefault(); renameDlg.confirmBtn.click(); }
-    if (e.key === 'Escape') { e.preventDefault(); renameDlg.cancelBtn.click(); }
+    if (e.key === 'Enter')  { e.preventDefault(); e.stopPropagation(); renameDlg.confirmBtn.click(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); renameDlg.cancelBtn.click(); }
   });
 
   async function cmdRename() {
@@ -1018,7 +1018,7 @@
 
   // Escape dismisses the copy/move dialog in any phase
   copyDlg.bg.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { e.preventDefault(); copyDlg.cancelBtn.click(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); copyDlg.cancelBtn.click(); }
   });
 
   // Wire cancel/abort/close button
@@ -1316,8 +1316,8 @@
   deleteDlg.toTrash.addEventListener('change', _updateDeleteBtn);
 
   deleteDlg.bg.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { e.preventDefault(); deleteDlg.cancelBtn.click(); }
-    if (e.key === 'Enter')  { e.preventDefault(); deleteDlg.confirmBtn.click(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); deleteDlg.cancelBtn.click(); }
+    if (e.key === 'Enter')  { e.preventDefault(); e.stopPropagation(); deleteDlg.confirmBtn.click(); }
   });
 
   async function cmdDelete() {
@@ -1374,9 +1374,11 @@
 
   // ─── Enter / double-click: open natively, or navigate into a regular folder ───
 
-  // True while any modal dialog is open, so the global Enter handler can
-  // stay out of the way of dialogs' own Enter-to-confirm bindings (those
-  // listeners don't stopPropagation, so this event still bubbles to us).
+  // Defense-in-depth check, kept even though every dialog's own keydown
+  // handler now calls stopPropagation() (so a key consumed by a dialog
+  // should never reach this far at all). This guard remains in case a
+  // future dialog is added without that call, or a dialog is shown by some
+  // path that doesn't go through its own keydown listener.
   function _anyDialogOpen() {
     return mkdirDlg.bg.classList.contains('visible')
         || renameDlg.bg.classList.contains('visible')
