@@ -46,6 +46,11 @@ describe('makePanelState', () => {
     assert.equal(p.path, '/home/user');
     assert.equal(p.tabs[0].path, '/home/user');
   });
+
+  test('directoryWritable defaults to true (optimistic) before any navigate result', () => {
+    const p = S.makePanelState();
+    assert.equal(p.directoryWritable, true);
+  });
 });
 
 // ─── nextBootAction ───────────────────────────────────────────────────────────
@@ -226,6 +231,29 @@ describe('applyNavigateResult', () => {
     const result = { panel: 'right', path: '/mnt', entries: [], history: ['/mnt'], volumes: ['/', '/mnt'] };
     const next = S.applyNavigateResult(panels, result);
     assert.deepEqual(next.right.volumes, ['/', '/mnt']);
+  });
+
+  test('carries directoryWritable through from the result', () => {
+    const panels = makePanels();
+    const result = { panel: 'left', path: '/ro', entries: [], history: ['/ro'], directoryWritable: false };
+    const next = S.applyNavigateResult(panels, result);
+    assert.equal(next.left.directoryWritable, false);
+  });
+
+  test('directoryWritable: true is carried through explicitly too, not just falsy-skipped', () => {
+    const panels = makePanels();
+    panels.left.directoryWritable = false; // simulate a stale prior value
+    const result = { panel: 'left', path: '/rw', entries: [], history: ['/rw'], directoryWritable: true };
+    const next = S.applyNavigateResult(panels, result);
+    assert.equal(next.left.directoryWritable, true);
+  });
+
+  test('defaults directoryWritable to true when the result omits it entirely', () => {
+    const panels = makePanels();
+    panels.left.directoryWritable = false; // simulate a stale prior value
+    const result = { panel: 'left', path: '/x', entries: [], history: ['/x'] }; // no directoryWritable field
+    const next = S.applyNavigateResult(panels, result);
+    assert.equal(next.left.directoryWritable, true);
   });
 
   test('new tab survives navigate result (UI is authoritative for tabs)', () => {
@@ -544,8 +572,10 @@ describe('nextSortState', () => {
 // ─── fmtSize ──────────────────────────────────────────────────────────────────
 
 describe('fmtSize', () => {
-  test('0 → empty string', () => assert.equal(S.fmtSize(0), ''));
-  test('null/undefined → empty string', () => {
+  test('0 → "0 B" (a genuinely empty file, e.g. a Shift+F4 stub, not blank)', () => {
+    assert.equal(S.fmtSize(0), '0 B');
+  });
+  test('null/undefined → empty string (no size at all, e.g. caller has nothing to show)', () => {
     assert.equal(S.fmtSize(null), '');
     assert.equal(S.fmtSize(undefined), '');
   });
@@ -736,6 +766,48 @@ describe('canOpenWith', () => {
 
   test('false when selected path is not found in entries', () => {
     assert.equal(S.canOpenWith(['/a/missing.txt'], entries, false), false);
+  });
+});
+
+// ─── canCreateFile ────────────────────────────────────────────────────────────
+
+describe('canCreateFile', () => {
+  test('false when busy, even if writable', () => {
+    assert.equal(S.canCreateFile(true, true), false);
+  });
+
+  test('true when writable and not busy', () => {
+    assert.equal(S.canCreateFile(true, false), true);
+  });
+
+  test('false when not writable', () => {
+    assert.equal(S.canCreateFile(false, false), false);
+  });
+
+  test('false when both not writable and busy', () => {
+    assert.equal(S.canCreateFile(false, true), false);
+  });
+
+  test('treats undefined writability as writable (optimistic default)', () => {
+    assert.equal(S.canCreateFile(undefined, false), true);
+  });
+
+  test('does not depend on selection at all — only busy + writability', () => {
+    // No selection-related params exist in this function's signature;
+    // this test exists mainly as living documentation of that fact.
+    assert.equal(S.canCreateFile.length, 2);
+  });
+});
+
+describe('createFileDialogHeader', () => {
+  test('includes the directory path', () => {
+    const h = S.createFileDialogHeader('/Users/ciacob/Documents');
+    assert.match(h, /\/Users\/ciacob\/Documents/);
+  });
+
+  test('reads as a sensible header, not just a bare path', () => {
+    const h = S.createFileDialogHeader('/tmp');
+    assert.match(h, /^New File in /);
   });
 });
 

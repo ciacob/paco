@@ -264,6 +264,164 @@ describe('mkdir task', () => {
   });
 });
 
+// ─── create-file task (Shift+F4) ───────────────────────────────────────────────
+
+describe('create-file task', () => {
+  test('creates a new, empty (0-byte) file and returns refreshed panel', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'stub.txt' });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok, 'task should succeed');
+    const created = path.join(workDir, 'stub.txt');
+    assert.ok(fs.existsSync(created));
+    assert.equal(fs.statSync(created).size, 0, 'created file must be exactly 0 bytes');
+    assert.equal(result.panel, 'left');
+    assert.ok(result.entries.find(e => e.name === 'stub.txt'));
+    assert.equal(result.created, created);
+  });
+
+  test('fails for empty name', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: '' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /required/i);
+  });
+
+  test('fails for a name that is only whitespace', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: '   ' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /required/i);
+  });
+
+  test('rejects "." as a name', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: '.' });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(!ok);
+  });
+
+  test('rejects ".." as a name', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: '..' });
+    task.start(ctx);
+    const { ok } = await promise;
+    assert.ok(!ok);
+  });
+
+  test('rejects forward-slash path separators — no sub-dirs mode equivalent here', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'a/b.txt' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /separator/i);
+    // Confirm nothing was created anywhere as a side effect
+    assert.ok(!fs.existsSync(path.join(workDir, 'a')));
+  });
+
+  test('rejects backslash path separators too', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'a\\b.txt' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /separator/i);
+  });
+
+  test('fails for invalid characters', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'bad<name>.txt' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /invalid/i);
+  });
+
+  test('fails if a file already exists with that name', async () => {
+    await mkfile(path.join(workDir, 'already-there.txt'), 'existing content');
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'already-there.txt' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /^Found existing file: already-there\.txt$/);
+    // Existing content must be completely untouched
+    assert.equal(fs.readFileSync(path.join(workDir, 'already-there.txt'), 'utf8'), 'existing content');
+  });
+
+  test('fails if a FOLDER already exists with that name (non-existence means neither type)', async () => {
+    await fsp.mkdir(path.join(workDir, 'already-a-dir'));
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'already-a-dir' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /^Found existing folder: already-a-dir$/);
+  });
+
+  test('trims surrounding whitespace from the provided name', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: '  spaced.txt  ' });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.created, path.join(workDir, 'spaced.txt'));
+  });
+
+  test('fails when panel has no current path', async () => {
+    purgeCache('paco/context');
+    purgeCache('worker/tasks');
+    const ctx2 = require('../paco/context');
+    ctx2.bootstrap();
+    ctx2.updatePanel('left', { path: '', selection: [], tabs: [{ id: 'tab-default', path: '', label: null }], activeTab: 'tab-default' });
+
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'whatever.txt' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no current path/i);
+  });
+
+  test('refreshed panel reflects the new file', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'visible-now.txt' });
+    task.start(ctx);
+    const { result } = await promise;
+    const entry = result.entries.find(e => e.name === 'visible-now.txt');
+    assert.ok(entry);
+    assert.equal(entry.type, 'file');
+    assert.equal(entry.size, 0);
+  });
+
+  test('validateFileName is exported and usable directly (pure, no I/O)', () => {
+    const task = require('../worker/tasks/create-file');
+    assert.equal(task.validateFileName('good.txt'), null);
+    assert.match(task.validateFileName(''), /required/i);
+    assert.match(task.validateFileName('a/b'), /separator/i);
+    assert.match(task.validateFileName('a\\b'), /separator/i);
+    assert.ok(task.validateFileName('.'));
+    assert.ok(task.validateFileName('..'));
+    assert.match(task.validateFileName('bad<name>'), /invalid/i);
+  });
+
+  test('reports progress through the operation', async () => {
+    const task = require('../worker/tasks/create-file');
+    const { ctx, promise } = makeCtx({ panel: 'left', name: 'progress-stub.txt' });
+    task.start(ctx);
+    const { progressLog } = await promise;
+    assert.ok(progressLog.length >= 2, 'should have multiple progress calls');
+    assert.equal(progressLog[progressLog.length - 1].pct, 100);
+  });
+});
+
 // ─── delete task ─────────────────────────────────────────────────────────────
 
 describe('delete task', () => {
@@ -1847,4 +2005,31 @@ describe('navigate task', () => {
     const last = result.breadcrumbs[result.breadcrumbs.length - 1];
     assert.equal(last.path, workDir);
   });
+
+  test('reports directoryWritable=true for a normal, writable directory', async () => {
+    const task = require('../worker/tasks/navigate');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: workDir, pushHistory: false });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.directoryWritable, true);
+  });
+
+  test('reports directoryWritable=false for a read-only directory (POSIX only)',
+    { skip: process.platform === 'win32' || process.getuid && process.getuid() === 0 },
+    async () => {
+      const readOnlyDir = path.join(workDir, 'read-only-dir');
+      await fsp.mkdir(readOnlyDir);
+      await fsp.chmod(readOnlyDir, 0o555); // r-xr-xr-x, no write bit for anyone
+      try {
+        const task = require('../worker/tasks/navigate');
+        const { ctx, promise } = makeCtx({ panel: 'left', path: readOnlyDir, pushHistory: false });
+        task.start(ctx);
+        const { ok, result } = await promise;
+        assert.ok(ok);
+        assert.equal(result.directoryWritable, false);
+      } finally {
+        await fsp.chmod(readOnlyDir, 0o755); // restore so cleanup can remove it
+      }
+    });
 });

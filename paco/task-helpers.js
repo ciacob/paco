@@ -11,6 +11,8 @@
  */
 
 const nodePath = require('path');
+const fsp      = require('fs/promises');
+const fsConstants = require('fs').constants;
 const context  = require('./context');
 const fs       = require('./fs-provider');
 
@@ -68,6 +70,21 @@ async function refreshPanel(panel, pathOverride) {
   const crumbs         = fs.breadcrumbs(dirPath);
   const updatedHistory = context.readHistory();
 
+  // Whether the LISTED DIRECTORY ITSELF (not its children) is writable —
+  // i.e. can new files/folders be created inside it. Checked fresh on every
+  // refresh (every navigation, and after every operation that re-lists a
+  // panel) so it's never more than one round-trip stale. Uses Node's own
+  // fs.access(W_OK), which is known to be unreliable on Windows (it can
+  // report writable for a folder that's actually inaccessible there) — an
+  // accepted, documented gap; the task that actually writes still catches
+  // and humanizes any real permission error regardless of what this flag says.
+  let directoryWritable = true;
+  try {
+    await fsp.access(dirPath, fsConstants.W_OK);
+  } catch (_) {
+    directoryWritable = false;
+  }
+
   return {
     panel,
     path:        dirPath,
@@ -77,6 +94,7 @@ async function refreshPanel(panel, pathOverride) {
     history:     updatedHistory[panel],
     volumes,
     config,
+    directoryWritable,
     // The worker's actual OS — NOT a persisted preference, just a runtime
     // fact the UI needs (e.g. to decide whether a folder is a macOS bundle).
     // Deliberately kept separate from `config` since it isn't user-editable

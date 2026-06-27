@@ -292,6 +292,23 @@ async function mkdir(dirPath) {
 }
 
 /**
+ * Create a new, empty (0-byte) file at the given path.
+ *
+ * Uses the 'wx' flag, which fails atomically at the OS level if anything
+ * already exists there — file, directory, or otherwise. This is a stronger
+ * guarantee than a separate stat-then-write (which would have a race
+ * window between the check and the write); callers should still do an
+ * explicit existence check first for a clean, humanized error message, but
+ * this flag is the real safety net underneath that.
+ *
+ * @param {string} filePath
+ */
+async function createFile(filePath) {
+  const handle = await fsp.open(filePath, 'wx');
+  await handle.close();
+}
+
+/**
  * Rename (or move within the same directory).
  */
 async function rename(oldPath, newPath) {
@@ -344,6 +361,7 @@ module.exports = {
   move,
   remove,
   mkdir,
+  createFile,
   rename,
   breadcrumbs,
 };

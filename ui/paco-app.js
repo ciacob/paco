@@ -47,6 +47,7 @@
     ovInput:    $('overlay-input'),
     ovBtns:     $('overlay-btns'),
     fkView:     $('fk-view'),
+    fkNewFile:  $('fk-newfile'),
     fkEdit:     $('fk-edit'),
     fkCopy:     $('fk-copy'),
     fkRename:   $('fk-rename'),
@@ -175,6 +176,13 @@
         resolve({ ok: true });
       }
 
+      // New File dialog completion
+      if (createFileDlg._resultResolve) {
+        const resolve = createFileDlg._resultResolve;
+        createFileDlg._resultResolve = null;
+        resolve({ ok: true });
+      }
+
       // F4 "Open with…" completion — unlike mkdir/rename, the result payload
       // itself matters (action: 'open'|'nativeOpen'|'lister'|'none'), so it's
       // forwarded as-is rather than collapsed to a bare { ok: true }.
@@ -224,6 +232,10 @@
           } else if (renameDlg._resultResolve) {
             const resolve = renameDlg._resultResolve;
             renameDlg._resultResolve = null;
+            resolve({ ok: false, error: errMsg || 'Unknown error' });
+          } else if (createFileDlg._resultResolve) {
+            const resolve = createFileDlg._resultResolve;
+            createFileDlg._resultResolve = null;
             resolve({ ok: false, error: errMsg || 'Unknown error' });
           } else if (appState._openWithResolve) {
             const resolve = appState._openWithResolve;
@@ -485,6 +497,7 @@
     dom.fkDelete.disabled = !enabled.delete;
     dom.fkRename.disabled = !S.canRename(sel, appState.panels[side].entries, appState.busy);
     dom.fkEdit.disabled   = !S.canOpenWith(sel, appState.panels[side].entries, appState.busy);
+    dom.fkNewFile.disabled = !S.canCreateFile(appState.panels[side].directoryWritable, appState.busy);
   }
 
   function setActivePanel(side) {
@@ -677,6 +690,107 @@
       mkdirDlg.cancelBtn.addEventListener('click', onClose);
     });
     mkdirDlg.bg.classList.remove('visible');
+  }
+
+  // ─── New File dialog (Shift+F4, two phases: configure → error) ──────────────
+
+  const createFileDlg = {
+    bg:          document.getElementById('createfile-dialog-bg'),
+    title:       document.getElementById('createfile-dialog-title'),
+    input:       document.getElementById('createfile-input'),
+    configPhase: document.getElementById('createfile-configure-phase'),
+    errorPhase:  document.getElementById('createfile-error-phase'),
+    errorMsg:    document.getElementById('createfile-error-msg'),
+    cancelBtn:   document.getElementById('createfile-cancel'),
+    confirmBtn:  document.getElementById('createfile-confirm'),
+  };
+
+  function _createFilePhase(phase) {
+    const isConfigure = phase === 'configure';
+    createFileDlg.configPhase.classList.toggle('hidden', !isConfigure);
+    createFileDlg.errorPhase.classList.toggle('visible',  !isConfigure);
+    if (isConfigure) {
+      createFileDlg.title.textContent     = 'New File';
+      createFileDlg.cancelBtn.textContent = 'Cancel';
+      createFileDlg.confirmBtn.style.display = '';
+    } else {
+      createFileDlg.title.textContent     = 'Error';
+      createFileDlg.cancelBtn.textContent = 'Close';
+      createFileDlg.confirmBtn.style.display = 'none';
+    }
+  }
+
+  createFileDlg.bg.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); createFileDlg.cancelBtn.click(); }
+  });
+
+  createFileDlg.input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); createFileDlg.confirmBtn.click(); }
+    if (e.key === 'Escape') { e.preventDefault(); createFileDlg.cancelBtn.click(); }
+  });
+
+  async function cmdCreateFile() {
+    if (appState.busy) return;
+    const side = appState.activePanel;
+    const panel = appState.panels[side];
+    if (!S.canCreateFile(panel.directoryWritable, appState.busy)) return;
+
+    // ── Configure phase ──────────────────────────────────────────────────────
+    // The input is never pre-populated — always starts blank.
+    createFileDlg.title.textContent = S.createFileDialogHeader(panel.path);
+    createFileDlg.input.value = '';
+
+    _createFilePhase('configure');
+    createFileDlg.bg.classList.add('visible');
+    setTimeout(() => createFileDlg.input.focus(), 30);
+
+    const fileName = await new Promise(resolve => {
+      const onCancel  = () => { cleanup(); resolve(null); };
+      const onConfirm = () => { cleanup(); resolve(createFileDlg.input.value.trim()); };
+      function cleanup() {
+        createFileDlg.cancelBtn.removeEventListener('click', onCancel);
+        createFileDlg.confirmBtn.removeEventListener('click', onConfirm);
+      }
+      createFileDlg.cancelBtn.addEventListener('click', onCancel);
+      createFileDlg.confirmBtn.addEventListener('click', onConfirm);
+    });
+
+    // Cancelled or left blank — close without touching the disk
+    if (!fileName) {
+      createFileDlg.bg.classList.remove('visible');
+      return;
+    }
+
+    // ── Task ───────────────────────────────────────────────────────────────────
+    adapter.assign('worker/tasks/create-file.js', {
+      panel: side, name: fileName,
+    }).catch(err => {
+      if (createFileDlg._resultResolve) {
+        const r = createFileDlg._resultResolve; createFileDlg._resultResolve = null;
+        r({ ok: false, error: err.message });
+      }
+    });
+
+    const result = await new Promise(resolve => { createFileDlg._resultResolve = resolve; });
+
+    if (result.ok) { createFileDlg.bg.classList.remove('visible'); return; }
+
+    // ── Error phase ────────────────────────────────────────────────────────────
+    const parts = (result.error || 'Unknown error').split('\n\n');
+    createFileDlg.errorMsg.innerHTML = '';
+    parts.forEach((p, i) => {
+      const el = document.createElement('p');
+      el.textContent = p;
+      if (i > 0) el.className = 'msg-tip';
+      createFileDlg.errorMsg.appendChild(el);
+    });
+    _createFilePhase('error');
+
+    await new Promise(resolve => {
+      const onClose = () => { createFileDlg.cancelBtn.removeEventListener('click', onClose); resolve(); };
+      createFileDlg.cancelBtn.addEventListener('click', onClose);
+    });
+    createFileDlg.bg.classList.remove('visible');
   }
 
   // ─── Rename dialog (two phases: configure → error) ──────────────────────────
@@ -1266,6 +1380,7 @@
   function _anyDialogOpen() {
     return mkdirDlg.bg.classList.contains('visible')
         || renameDlg.bg.classList.contains('visible')
+        || createFileDlg.bg.classList.contains('visible')
         || copyDlg.bg.classList.contains('visible')
         || deleteDlg.bg.classList.contains('visible')
         || dom.overlay.classList.contains('visible');
@@ -1327,6 +1442,7 @@
     const side  = appState.activePanel;
     const other = side === 'left' ? 'right' : 'left';
     if (e.key === 'F2')                              { e.preventDefault(); refreshBoth(); }
+    else if (e.key === 'F4' && e.shiftKey)           { e.preventDefault(); cmdCreateFile(); }
     else if (e.key === 'F4')                         { e.preventDefault(); cmdOpenWith(); }
     else if (e.key === 'F5')                         { e.preventDefault(); cmdCopy(); }
     else if (e.key === 'F6' && e.shiftKey)           { e.preventDefault(); cmdRename(); }
@@ -1350,6 +1466,7 @@
   });
 
   dom.fkView.addEventListener('click',   () => showError('Coming soon', 'View not yet implemented'));
+  dom.fkNewFile.addEventListener('click', cmdCreateFile);
   dom.fkEdit.addEventListener('click',   cmdOpenWith);
   dom.fkCopy.addEventListener('click',   cmdCopy);
   dom.fkRename.addEventListener('click', cmdRename);

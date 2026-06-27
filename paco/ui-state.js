@@ -28,6 +28,10 @@ function makePanelState(defaultPath = '') {
     tabs: [{ id: 'tab-default', path: defaultPath, label: null }],
     activeTab:  'tab-default',
     volumes:    [],
+    // Optimistic default until the first navigate result reports the real
+    // value — keeps New Folder/New File enabled rather than flashing
+    // disabled before anything has loaded.
+    directoryWritable: true,
   };
 }
 
@@ -158,13 +162,20 @@ function applyNavigateResult(panels, result) {
 
   const newPanel = {
     ...prev,
-    path:       result.path,
-    entries:    result.entries    || [],
-    selection:  [],
-    history:    result.history    || prev.history,
-    tabs:       updatedTabs,
+    path:              result.path,
+    entries:           result.entries    || [],
+    selection:         [],
+    history:           result.history    || prev.history,
+    tabs:              updatedTabs,
     activeTab,
-    volumes:    result.volumes    || prev.volumes,
+    volumes:           result.volumes    || prev.volumes,
+    // Whether the panel's own listed directory can be written into (i.e.
+    // whether New Folder/New File should be enabled). Defaults to true —
+    // the optimistic default — if a result somehow doesn't carry it, rather
+    // than leaving stale false from a previous directory.
+    directoryWritable: result.directoryWritable !== undefined
+      ? result.directoryWritable
+      : true,
   };
 
   return { ...panels, [side]: newPanel };
@@ -317,12 +328,21 @@ function nextSortState(current, clickedColumn) {
 
 /**
  * Format a byte count for display in the size column.
- * Returns empty string for zero (used for directories).
+ *
+ * Treats 0 as a real, formattable size ("0 B") — e.g. a freshly created
+ * stub file (Shift+F4) is genuinely empty, and showing its size explicitly
+ * is the only way to confirm that to the user rather than leaving the cell
+ * looking blank/unloaded. Whether to show a size AT ALL (e.g. blank for
+ * directories) is the caller's decision, not this function's — see the
+ * `entry.type === 'dir' ? '' : fmtSize(entry.size)` pattern at the render
+ * call site.
+ *
  * @param {number} bytes
  * @returns {string}
  */
 function fmtSize(bytes) {
-  if (!bytes || bytes === 0) return '';
+  if (bytes == null) return '';
+  if (bytes === 0)        return '0 B';
   if (bytes < 1024)       return bytes + ' B';
   if (bytes < 1048576)    return (bytes / 1024).toFixed(1) + ' K';
   if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' M';
@@ -442,6 +462,31 @@ function canOpenWith(selection, entries, busy) {
   const entry = entries.find(e => e.path === selection[0]);
   if (!entry) return false;
   return entry.type === 'file';
+}
+
+/**
+ * Determine whether the "New File" command (Shift+F4) should be enabled.
+ * Unlike Rename/Open-with, this has nothing to do with the current
+ * selection — it's about whether the active panel's LISTED DIRECTORY
+ * itself can be written into. That fact is refreshed on every panel
+ * update (see paco/task-helpers.js#refreshPanel's directoryWritable field).
+ *
+ * @param {boolean} directoryWritable — appState.panels[side].directoryWritable
+ * @param {boolean} busy
+ * @returns {boolean}
+ */
+function canCreateFile(directoryWritable, busy) {
+  if (busy) return false;
+  return directoryWritable !== false;
+}
+
+/**
+ * Build the header line for the "New File" dialog.
+ * @param {string} dirPath — the directory the file will be created in
+ * @returns {string}
+ */
+function createFileDialogHeader(dirPath) {
+  return `New File in ${dirPath}`;
 }
 
 /**
@@ -819,6 +864,8 @@ const uiState = {
   fkeyEnabledState,
   canRename,
   canOpenWith,
+  canCreateFile,
+  createFileDialogHeader,
   renameDialogHeader,
   renameErrorMessage,
   typeMismatchMessage,
