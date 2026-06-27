@@ -465,6 +465,39 @@ function renameErrorMessage(reason) {
   return reason || 'Rename failed';
 }
 
+/**
+ * Build the abort message for a source/destination type mismatch — a file
+ * colliding with a same-named folder, or vice versa. This is always a hard
+ * abort, independent of whatever conflict strategy is configured: "merge"
+ * a folder into a file (or any of the file-replace strategies into a
+ * folder) has no sensible meaning, so the type check happens before any
+ * strategy is even consulted, in copy-engine.js and rename.js alike.
+ *
+ * Type labels reflect the item's REAL on-disk type (fs.stat), never an
+ * extension-based guess — a file named "test.app" is still FILE, even on
+ * a platform where ".app" is normally a bundle-folder convention.
+ *
+ * @param {'copy'|'move'|'rename'} action
+ * @param {string} sourcePath    — full path of the source item
+ * @param {'file'|'dir'} sourceType
+ * @param {string} destDirPath   — the destination DIRECTORY (copy/move), or
+ *                                 the shared parent directory (rename, where
+ *                                 source and target are siblings)
+ * @param {'file'|'dir'} destType — type of the EXISTING colliding item
+ * @param {string} collidingName — basename of the colliding item
+ * @returns {string}
+ */
+function typeMismatchMessage(action, sourcePath, sourceType, destDirPath, destType, collidingName) {
+  const sourceLabel = sourceType === 'dir' ? 'FOLDER' : 'FILE';
+  const destLabel    = destType === 'dir' ? 'FOLDER' : 'FILE';
+  return (
+    `Cannot ${action} source ${sourcePath} ${sourceLabel} to target ${destDirPath}, ` +
+    `because a ${destLabel} named ${collidingName} already exists there.\n\n` +
+    `Please rename either the source or the target in order to proceed.\n\n` +
+    `Operation aborted.`
+  );
+}
+
 // ─── Open natively (Enter key) ─────────────────────────────────────────────────
 
 /**
@@ -704,9 +737,13 @@ function copyReport(stats, dst, mode) {
   const {
     copied = 0, prefixed = 0, replacedOlder = 0, skippedNewer = 0,
     mergedFolders = 0, skippedSecurity = 0, aborted = 0, abortReason = '',
+    abortMessage = null,
   } = stats;
 
   if (aborted) {
+    // A precise message (e.g. from a source/destination type mismatch)
+    // always takes priority over the generic name-clash wording.
+    if (abortMessage) return abortMessage;
     const reason = abortReason
       ? `"${abortReason}" already exists`
       : 'a name conflict was encountered';
@@ -784,6 +821,7 @@ const uiState = {
   canOpenWith,
   renameDialogHeader,
   renameErrorMessage,
+  typeMismatchMessage,
   isMacBundleDir,
   decideEnterAction,
   classifyMime,

@@ -342,6 +342,14 @@ describe('copyReport', () => {
     assert.ok(r.startsWith('Move aborted'));
     assert.ok(!r.includes('undefined'));
   });
+
+  test('a precise abortMessage (e.g. type mismatch) overrides the generic abort wording', () => {
+    const precise = S.typeMismatchMessage('copy', '/a/x.txt', 'file', '/b', 'dir', 'x.txt');
+    const r = S.copyReport({ aborted: 1, abortReason: 'x.txt', abortMessage: precise }, '/b');
+    assert.equal(r, precise);
+    assert.ok(!r.includes('already exists because')); // not the generic phrasing
+  });
+
   test('simple copy', () => {
     const r = S.copyReport({ copied: 3 }, '/dst/folder');
     assert.ok(r.includes('3 items'));
@@ -746,6 +754,64 @@ describe('renameErrorMessage', () => {
   test('falls back to a default when no reason given', () => {
     assert.equal(S.renameErrorMessage(), 'Rename failed');
     assert.equal(S.renameErrorMessage(''), 'Rename failed');
+  });
+});
+
+// ─── typeMismatchMessage ──────────────────────────────────────────────────────
+
+describe('typeMismatchMessage', () => {
+  test('matches the exact worked example: file source colliding with a folder destination', () => {
+    const msg = S.typeMismatchMessage(
+      'copy',
+      '/Users/ciacob/test.app', 'file',
+      '/Users/ciacob/projects/simulcast', 'dir',
+      'test.app'
+    );
+    assert.equal(
+      msg,
+      'Cannot copy source /Users/ciacob/test.app FILE to target /Users/ciacob/projects/simulcast, ' +
+      'because a FOLDER named test.app already exists there.\n\n' +
+      'Please rename either the source or the target in order to proceed.\n\n' +
+      'Operation aborted.'
+    );
+  });
+
+  test('the reverse: folder source colliding with a file destination', () => {
+    const msg = S.typeMismatchMessage(
+      'move',
+      '/src/reports', 'dir',
+      '/dst', 'file',
+      'reports'
+    );
+    assert.match(msg, /^Cannot move source \/src\/reports FOLDER to target \/dst, /);
+    assert.match(msg, /because a FILE named reports already exists there\./);
+  });
+
+  test('works for the rename action wording too', () => {
+    const msg = S.typeMismatchMessage(
+      'rename',
+      '/dir/old.txt', 'file',
+      '/dir', 'dir',
+      'newname'
+    );
+    assert.match(msg, /^Cannot rename source \/dir\/old\.txt FILE to target \/dir, /);
+  });
+
+  test('always ends with the same two trailer paragraphs', () => {
+    const msg = S.typeMismatchMessage('copy', '/a', 'file', '/b', 'dir', 'a');
+    assert.ok(msg.endsWith(
+      'Please rename either the source or the target in order to proceed.\n\nOperation aborted.'
+    ));
+  });
+
+  test('a symlink source is labelled FILE, not something else (FILE|FOLDER is the only enum)', () => {
+    const msg = S.typeMismatchMessage('copy', '/a/link', 'symlink', '/b', 'dir', 'link');
+    assert.match(msg, /\/a\/link FILE to target/);
+  });
+
+  test('an "other" dest type is labelled FILE too', () => {
+    const msg = S.typeMismatchMessage('copy', '/a/x', 'dir', '/b', 'other', 'x');
+    assert.match(msg, /because a FILE named x already exists/);
   });
 });
 

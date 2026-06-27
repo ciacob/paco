@@ -16,6 +16,7 @@ const fsp      = require('fs/promises');
 const fs       = require('fs');
 const provider = require('./fs-provider');
 const helpers  = require('./task-helpers');
+const uiState  = require('./ui-state');
 
 // ─── Size scanning ────────────────────────────────────────────────────────────
 
@@ -108,6 +109,19 @@ async function copyDir(src, dst, opts, copiedPaths) {
 
     if (dirent.isDirectory()) {
       const dstExists = await provider.stat(dstChild);
+
+      // Same hard-abort rule as the top-level loop: a type mismatch is
+      // never resolved by a conflict strategy, even nested inside a
+      // recursive directory copy.
+      if (dstExists && dstExists.type !== 'dir') {
+        opts.abortReason  = dirent.name;
+        opts.abortMessage = uiState.typeMismatchMessage(
+          opts.isMove ? 'move' : 'copy', srcChild, 'dir', dst, dstExists.type, dirent.name
+        );
+        opts.abortSignal = true;
+        return stats;
+      }
+
       if (dstExists) {
         if (opts.conflictFolders === 'abort') {
           opts.abortReason = dirent.name; opts.abortSignal = true; return stats;
@@ -131,6 +145,18 @@ async function copyDir(src, dst, opts, copiedPaths) {
 
     } else {
       const dstExists = await provider.stat(dstChild);
+
+      // Mirror of the directory branch's hard-abort, for the file side.
+      if (dstExists && dstExists.type === 'dir') {
+        const srcLabel = dirent.isSymbolicLink() ? 'symlink' : 'file';
+        opts.abortReason  = dirent.name;
+        opts.abortMessage = uiState.typeMismatchMessage(
+          opts.isMove ? 'move' : 'copy', srcChild, srcLabel, dst, 'dir', dirent.name
+        );
+        opts.abortSignal = true;
+        return stats;
+      }
+
       if (dstExists) {
         if (opts.conflictFiles === 'abort') {
           opts.abortReason = dirent.name; opts.abortSignal = true; return stats;
@@ -279,6 +305,19 @@ async function runCopyMove(ctx, config, isMove) {
       const dstPath   = nodePath.join(dst, srcName);
       const dstExists = await provider.stat(dstPath);
 
+      // Type mismatch is never a strategy decision — "merge"/"replace" a
+      // folder into an existing FILE (or vice versa) has no sensible
+      // meaning, so this is always a hard, whole-operation abort, checked
+      // before any conflictFolders/conflictFiles value is even consulted.
+      if (dstExists && dstExists.type !== 'dir') {
+        totalStats.aborted = 1;
+        totalStats.abortReason = srcName;
+        totalStats.abortMessage = uiState.typeMismatchMessage(
+          isMove ? 'move' : 'copy', src, 'dir', dst, dstExists.type, srcName
+        );
+        aborted = true; break;
+      }
+
       if (dstExists) {
         if (conflictFolders === 'abort') {
           totalStats.aborted = 1; totalStats.abortReason = srcName;
@@ -298,10 +337,11 @@ async function runCopyMove(ctx, config, isMove) {
       }
 
       const opts = {
-        conflictFiles, conflictFolders, showHidden,
+        conflictFiles, conflictFolders, showHidden, isMove,
         isCancelled:   () => ctx.isCancelled(),
         abortSignal:   false,
         abortReason:   '',
+        abortMessage:  null,
         // Recursive byte callback: accumulate into doneBytes and push progress
         onBytesCopied: (delta) => {
           doneBytes += delta;
@@ -314,6 +354,7 @@ async function runCopyMove(ctx, config, isMove) {
         const sub = await copyDir(src, effectiveDst, opts, copiedPaths);
         if (opts.abortSignal) {
           totalStats.aborted = 1; totalStats.abortReason = opts.abortReason;
+          if (opts.abortMessage) totalStats.abortMessage = opts.abortMessage;
           aborted = true; break;
         }
         totalStats.copied         += sub.copied;
@@ -331,6 +372,17 @@ async function runCopyMove(ctx, config, isMove) {
       // ── File ───────────────────────────────────────────────────────────────
       const dstPath   = nodePath.join(dst, srcName);
       const dstExists = await provider.stat(dstPath);
+
+      // Same hard-abort rule as the directory branch above: a type mismatch
+      // is never resolved by a conflict strategy.
+      if (dstExists && dstExists.type === 'dir') {
+        totalStats.aborted = 1;
+        totalStats.abortReason = srcName;
+        totalStats.abortMessage = uiState.typeMismatchMessage(
+          isMove ? 'move' : 'copy', src, srcStat.type, dst, 'dir', srcName
+        );
+        aborted = true; break;
+      }
 
       if (dstExists) {
         if (conflictFiles === 'abort') {

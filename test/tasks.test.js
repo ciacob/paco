@@ -693,6 +693,144 @@ describe('copy task', () => {
     const withKb = progressLog.filter(p => p.extra && p.extra.kbDone > 0);
     assert.ok(withKb.length > 1, 'should report progress for files inside subdirs');
   });
+
+  // ── Type mismatch: hard abort regardless of configured strategy ────────────
+
+  test('folder source colliding with an existing FILE destination hard-aborts, even with conflictFolders=replace', async () => {
+    const srcFolder = path.join(srcDir, 'report');
+    await fsp.mkdir(srcFolder);
+    await mkfile(path.join(srcFolder, 'inner.txt'), 'inner');
+    const dstFile = path.join(dstDir, 'report');
+    await mkfile(dstFile, 'do not delete me');
+
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [srcFolder], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFolders: 'replace', // would normally delete-and-replace; must NOT apply here
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    assert.ok(ok, 'task settles via done(), not fail()');
+    assert.equal(result.aborted, true);
+    assert.ok(result.stats.abortMessage, 'should carry a precise abort message');
+    assert.match(result.stats.abortMessage, /^Cannot copy source .*report FOLDER to target .*dst, /);
+    assert.match(result.stats.abortMessage, /because a FILE named report already exists there\./);
+    assert.match(result.stats.abortMessage, /Operation aborted\.$/);
+
+    // The critical safety assertion: the existing file must be untouched —
+    // this is exactly the silent-deletion foot-gun the type check prevents.
+    assert.ok(fs.existsSync(dstFile), 'existing file must NOT have been deleted');
+    assert.equal(fs.readFileSync(dstFile, 'utf8'), 'do not delete me');
+  });
+
+  test('folder source colliding with an existing FILE destination hard-aborts, even with conflictFolders=merge', async () => {
+    const srcFolder = path.join(srcDir, 'data');
+    await fsp.mkdir(srcFolder);
+    const dstFile = path.join(dstDir, 'data');
+    await mkfile(dstFile, 'a plain file');
+
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [srcFolder], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFolders: 'merge',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    assert.ok(ok);
+    assert.equal(result.aborted, true);
+    assert.match(result.stats.abortMessage, /FOLDER to target .* because a FILE named data already exists/);
+    assert.equal(fs.readFileSync(dstFile, 'utf8'), 'a plain file');
+  });
+
+  test('file source colliding with an existing FOLDER destination hard-aborts, even with conflictFiles=replaceAll', async () => {
+    const srcFile = path.join(srcDir, 'notes.txt');
+    await mkfile(srcFile, 'new notes');
+    const dstFolder = path.join(dstDir, 'notes.txt');
+    await fsp.mkdir(dstFolder);
+    await mkfile(path.join(dstFolder, 'keep-me.txt'), 'must survive');
+
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [srcFile], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'replaceAll',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    assert.ok(ok);
+    assert.equal(result.aborted, true);
+    assert.match(result.stats.abortMessage, /^Cannot copy source .*notes\.txt FILE to target .*dst, /);
+    assert.match(result.stats.abortMessage, /because a FOLDER named notes\.txt already exists there\./);
+
+    // The folder and its contents must survive untouched
+    assert.ok(fs.existsSync(dstFolder));
+    assert.ok(fs.existsSync(path.join(dstFolder, 'keep-me.txt')));
+    assert.equal(fs.readFileSync(path.join(dstFolder, 'keep-me.txt'), 'utf8'), 'must survive');
+  });
+
+  test('type mismatch nested inside a recursive directory copy also hard-aborts the whole operation', async () => {
+    // src/tree/report is a FOLDER; dst already has a FILE named "report"
+    // one level down, so the mismatch is only discovered mid-recursion.
+    const subDir = path.join(srcDir, 'tree');
+    await fsp.mkdir(path.join(subDir, 'report'), { recursive: true });
+    await mkfile(path.join(subDir, 'report', 'inner.txt'), 'inner');
+    await mkfile(path.join(subDir, 'sibling.txt'), 'sibling');
+
+    const dstTree = path.join(dstDir, 'tree');
+    await fsp.mkdir(dstTree, { recursive: true });
+    await mkfile(path.join(dstTree, 'report'), 'an existing FILE, not a folder');
+
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [subDir], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFolders: 'merge', // would normally merge straight through
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    assert.ok(ok);
+    assert.equal(result.aborted, true);
+    assert.match(result.stats.abortMessage, /because a FILE named report already exists there\./);
+
+    // The pre-existing file at dst/tree/report must be untouched
+    assert.equal(fs.readFileSync(path.join(dstTree, 'report'), 'utf8'), 'an existing FILE, not a folder');
+
+    // Whether sibling.txt had already been copied before the mismatch was
+    // discovered depends on fs.readdir's iteration order, which Node does
+    // not guarantee — so this test deliberately does not assert on it
+    // either way. What IS deterministic and worth asserting: the source
+    // tree itself must be completely unaffected by the aborted copy (copy
+    // never touches sources at all, abort or not), and "report" must not
+    // have been created as a folder anywhere it wasn't already a file.
+    assert.equal(fs.readFileSync(path.join(subDir, 'report', 'inner.txt'), 'utf8'), 'inner',
+      'source tree must be untouched — copy never modifies sources');
+    assert.equal(fs.readFileSync(path.join(subDir, 'sibling.txt'), 'utf8'), 'sibling');
+    assert.ok(fs.statSync(path.join(dstTree, 'report')).isFile(),
+      'the colliding destination item must still be a file, never converted into a folder');
+  });
+
+  test('a same-type collision (file onto file) is NOT affected by the type-mismatch check', async () => {
+    // Sanity check: the new guard must not interfere with the ordinary,
+    // already-correct same-type collision handling.
+    const src = path.join(srcDir, 'same.txt');
+    const dst = path.join(dstDir, 'same.txt');
+    await mkfile(src, 'new');
+    await mkfile(dst, 'old');
+
+    const task = require('../worker/tasks/copy');
+    const { ctx, promise } = makeCtx({
+      sources: [src], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'replaceAll',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    assert.ok(ok);
+    assert.equal(result.aborted, false);
+    assert.equal(fs.readFileSync(dst, 'utf8'), 'new');
+  });
 });
 
 // ─── move task ────────────────────────────────────────────────────────────────
@@ -885,6 +1023,65 @@ describe('move task', () => {
     assert.ok(ok);
     assert.ok(!fs.existsSync(srcD), 'source dir should be deleted after move');
     assert.ok(fs.existsSync(path.join(dstDir, 'movedir', 'file.txt')));
+  });
+
+  // ── Type mismatch: hard abort, source AND destination both untouched ───────
+  // Move is copy-then-delete, so the safety bar here is higher than copy's:
+  // not only must the colliding destination item survive, but — since the
+  // whole point of phase 3b is "only delete sources after a clean success"
+  // — the source must ALSO still be exactly where it started.
+
+  test('folder source colliding with an existing FILE destination hard-aborts; both source and destination survive untouched', async () => {
+    const srcFolder = path.join(srcDir, 'report');
+    await fsp.mkdir(srcFolder);
+    await mkfile(path.join(srcFolder, 'inner.txt'), 'inner content');
+    const dstFile = path.join(dstDir, 'report');
+    await mkfile(dstFile, 'do not delete me');
+
+    const task = require('../worker/tasks/move');
+    const { ctx, promise } = makeCtx({
+      sources: [srcFolder], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFolders: 'replace',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    assert.ok(ok);
+    assert.equal(result.aborted, true);
+    assert.match(result.stats.abortMessage, /^Cannot move source .*report FOLDER to target .*dst, /);
+    assert.match(result.stats.abortMessage, /because a FILE named report already exists there\./);
+
+    // Destination file untouched
+    assert.ok(fs.existsSync(dstFile));
+    assert.equal(fs.readFileSync(dstFile, 'utf8'), 'do not delete me');
+
+    // Source folder must STILL exist — move's phase 3b (delete sources)
+    // must never run when the operation aborted.
+    assert.ok(fs.existsSync(srcFolder), 'source folder must survive an aborted move');
+    assert.equal(fs.readFileSync(path.join(srcFolder, 'inner.txt'), 'utf8'), 'inner content');
+  });
+
+  test('file source colliding with an existing FOLDER destination hard-aborts; source survives', async () => {
+    const srcFile = path.join(srcDir, 'notes.txt');
+    await mkfile(srcFile, 'my notes');
+    const dstFolder = path.join(dstDir, 'notes.txt');
+    await fsp.mkdir(dstFolder);
+
+    const task = require('../worker/tasks/move');
+    const { ctx, promise } = makeCtx({
+      sources: [srcFile], dst: dstDir, panel: 'left', dstPanel: 'right',
+      conflictFiles: 'replaceAll',
+    });
+    task.start(ctx);
+    const { ok, result } = await promise;
+
+    assert.ok(ok);
+    assert.equal(result.aborted, true);
+    assert.match(result.stats.abortMessage, /because a FOLDER named notes\.txt already exists there\./);
+
+    assert.ok(fs.existsSync(srcFile), 'source file must survive an aborted move');
+    assert.equal(fs.readFileSync(srcFile, 'utf8'), 'my notes');
+    assert.ok(fs.existsSync(dstFolder));
   });
 });
 
@@ -1123,6 +1320,83 @@ describe('rename task', () => {
     assert.ok(ok);
     assert.ok(fs.existsSync(path.join(workDir, '(1) dir-clash3')));
     assert.ok(fs.existsSync(clash), 'original clashing folder should remain');
+  });
+
+  // ── Type mismatch: hard abort regardless of configured strategy ────────────
+
+  test('renaming a FOLDER onto an existing FILE name hard-aborts, even with conflictFolders=replace', async () => {
+    const src = path.join(workDir, 'myfolder');
+    await fsp.mkdir(src);
+    await mkfile(path.join(src, 'inner.txt'), 'inner content');
+    const clashFile = path.join(workDir, 'taken');
+    await mkfile(clashFile, 'do not delete me');
+
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({
+      panel: 'left', source: src, newName: 'taken', conflictFolders: 'replace',
+    });
+    task.start(ctx);
+    const { ok, error } = await promise;
+
+    assert.ok(!ok, 'rename uses ctx.fail() for this case, unlike copy/move\'s ctx.done()');
+    assert.match(error, /^Cannot rename source .*myfolder FOLDER to target .*, /);
+    assert.match(error, /because a FILE named taken already exists there\./);
+    assert.match(error, /Operation aborted\.$/);
+
+    // The critical safety assertion: the existing file must survive —
+    // conflictFolders=replace must never apply when the actual collision
+    // is with a file, not a folder.
+    assert.ok(fs.existsSync(clashFile), 'existing file must NOT have been deleted');
+    assert.equal(fs.readFileSync(clashFile, 'utf8'), 'do not delete me');
+
+    // The source folder must still exist too — the rename never happened.
+    assert.ok(fs.existsSync(src));
+    assert.equal(fs.readFileSync(path.join(src, 'inner.txt'), 'utf8'), 'inner content');
+  });
+
+  test('renaming a FILE onto an existing FOLDER name hard-aborts, even with conflictFiles=replaceAll', async () => {
+    const src = path.join(workDir, 'myfile.txt');
+    await mkfile(src, 'my content');
+    const clashFolder = path.join(workDir, 'taken-dir');
+    await fsp.mkdir(clashFolder);
+    await mkfile(path.join(clashFolder, 'keep-me.txt'), 'must survive');
+
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({
+      panel: 'left', source: src, newName: 'taken-dir', conflictFiles: 'replaceAll',
+    });
+    task.start(ctx);
+    const { ok, error } = await promise;
+
+    assert.ok(!ok);
+    assert.match(error, /^Cannot rename source .*myfile\.txt FILE to target .*, /);
+    assert.match(error, /because a FOLDER named taken-dir already exists there\./);
+
+    assert.ok(fs.existsSync(clashFolder));
+    assert.ok(fs.existsSync(path.join(clashFolder, 'keep-me.txt')));
+    assert.ok(fs.existsSync(src), 'source file must survive an aborted rename');
+  });
+
+  test('a same-type collision (folder onto folder) is NOT affected by the type-mismatch check', async () => {
+    // Sanity check: the new guard must not interfere with rename's
+    // already-correct same-type collision handling (covered by the
+    // existing "folder clash: replace" test above, re-verified here
+    // alongside the type-mismatch tests for contrast).
+    const src = path.join(workDir, 'same-src-dir');
+    const clash = path.join(workDir, 'same-clash-dir');
+    await fsp.mkdir(src);
+    await mkfile(path.join(src, 'a.txt'), 'a');
+    await fsp.mkdir(clash);
+
+    const task = require('../worker/tasks/rename');
+    const { ctx, promise } = makeCtx({
+      panel: 'left', source: src, newName: 'same-clash-dir', conflictFolders: 'replace',
+    });
+    task.start(ctx);
+    const { ok } = await promise;
+
+    assert.ok(ok);
+    assert.ok(fs.existsSync(path.join(workDir, 'same-clash-dir', 'a.txt')));
   });
 
   test('refreshed panel reflects the new name', async () => {

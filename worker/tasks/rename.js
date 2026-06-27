@@ -29,6 +29,7 @@
 const nodePath = require('path');
 const provider = require('../../paco/fs-provider');
 const helpers  = require('../../paco/task-helpers');
+const uiState  = require('../../paco/ui-state');
 
 const INVALID_CHARS = /[<>:"|?*\x00-\x1f/\\]/; // no separators allowed — single segment only
 
@@ -102,6 +103,26 @@ module.exports = {
     const targetExists = await provider.stat(targetPath);
 
     if (targetExists) {
+      // Type mismatch is never a strategy decision — see paco/ui-state.js's
+      // typeMismatchMessage doc comment for the full reasoning. This check
+      // runs before conflictFiles/conflictFolders are even consulted, the
+      // same way copy-engine.js handles the equivalent case for copy/move.
+      // Type mismatch is never a strategy decision — see paco/ui-state.js's
+      // typeMismatchMessage doc comment for the full reasoning. This check
+      // runs before conflictFiles/conflictFolders are even consulted, the
+      // same way copy-engine.js handles the equivalent case for copy/move.
+      // The check is dir-vs-non-dir, matching the only distinction the rest
+      // of this function actually makes (a symlink colliding with another
+      // symlink, for instance, is a same-"kind" collision for our purposes
+      // and should still go through the normal file-style strategy below).
+      const srcIsDir = srcStat.type === 'dir';
+      const dstIsDir = targetExists.type === 'dir';
+      if (srcIsDir !== dstIsDir) {
+        return ctx.fail(uiState.typeMismatchMessage(
+          'rename', source, srcStat.type, dirPath, targetExists.type, trimmed
+        ));
+      }
+
       const isDirTarget = targetExists.type === 'dir';
       const strategy = isDirTarget ? conflictFolders : conflictFiles;
 
