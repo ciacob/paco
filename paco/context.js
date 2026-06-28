@@ -133,6 +133,13 @@ const DEFAULT_CONFIG = {
   // Rename dialog preferences (subset: no merge, no progress/report)
   renameConflictFiles:   'abort',
   renameConflictFolders: 'abort',
+
+  // Twin-panel divider position, as the left panel's share of the
+  // available width (0..1). Persisted on drag-end and on double-click
+  // reset. The 250px-per-panel minimum is enforced live at render time,
+  // not baked into this stored value, so it stays meaningful across
+  // different window sizes.
+  panelSplit: 0.5,
 };
 
 // Maximum navigation history entries kept per panel

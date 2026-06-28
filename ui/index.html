@@ -190,8 +190,20 @@
     #panels-area {
       flex: 1 1 0;
       display: flex;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: hidden;
       border-bottom: 1px solid var(--border);
+    }
+    /* Applied by JS (see _applyPanelSplit) only when the combined 300px
+       floors for both panels plus the divider genuinely exceed the
+       available width — i.e. exactly the narrow-window edge case, not
+       "whenever auto's own heuristic decides it's needed". Driven from a
+       single source of truth (the same resize/drag recalculation that
+       already determines panel widths) instead of letting the browser's
+       native overflow:auto heuristic make an independent, possibly
+       inconsistent decision on the same boundary. */
+    #panels-area.overflow-scroll {
+      overflow-x: auto;
     }
     #panel-divider {
       width: 3px;
@@ -201,11 +213,24 @@
       transition: background var(--transition);
     }
     #panel-divider:hover { background: var(--accent2); }
+    #panel-divider.dragging { background: var(--accent2); transition: none; }
 
     /* Single panel */
     .panel {
-      flex: 1 1 0;
-      min-width: 0;
+      /* flex-basis is set live by JS as a PIXEL value (see _applyPanelSplit) —
+         not a CSS percentage, since percentages are relative to the full
+         container including the 3px divider, which would make two 50%
+         panels overflow by 3px. JS computes "available width minus divider"
+         itself and converts the persisted 0..1 fraction into exact pixels
+         on every render/resize/drag, so the two panels plus the divider
+         always sum to exactly the container's width.
+         flex-grow/flex-shrink are both 0 so JS's basis is authoritative.
+         min-width is the hard, browser-enforced 300px floor — if both
+         panels' minimums plus the divider exceed the window width,
+         #panels-area's overflow-x:auto kicks in rather than either panel
+         shrinking further. */
+      flex: 0 0 50%;
+      min-width: 300px;
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -304,11 +329,13 @@
       flex: 1;
       display: flex;
       align-items: center;
-      overflow: hidden;
+      overflow-x: auto;
+      overflow-y: hidden;
       font-family: var(--font-mono);
       font-size: 11px;
       color: var(--text2);
     }
+    .breadcrumb::-webkit-scrollbar { height: 0; }
     .crumb {
       padding: 2px 4px;
       border-radius: 3px;

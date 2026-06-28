@@ -54,6 +54,8 @@
     fkMove:     $('fk-move'),
     fkMkdir:    $('fk-mkdir'),
     fkDelete:   $('fk-delete'),
+    panelsArea:   $('panels-area'),
+    panelDivider: $('panel-divider'),
   };
 
   function pd(side) {
@@ -68,6 +70,157 @@
       statSel: $(`status-${side}-sel`),
     };
   }
+
+  // ─── Panel divider (drag-to-resize) ───────────────────────────────────────────
+
+  const PANEL_MIN_PX = 300;
+  const DIVIDER_PX    = 3;
+
+  // Tracks the in-progress drag, if any. null when not dragging.
+  let _dividerDrag = null;
+
+  /**
+   * Compute and apply pixel flex-basis values for both panels from a 0..1
+   * fraction (left panel's share of the available width, i.e. the
+   * container width minus the divider). Always converts to PIXELS rather
+   * than leaving it as a CSS percentage — see the .panel CSS comment for
+   * why (percentages are relative to the full container including the
+   * divider, which would overflow by the divider's width on every split).
+   *
+   * The 300px floor is enforced here as a best-effort clamp on the
+   * fraction before converting to pixels, purely so the two panels land on
+   * sensible round numbers; the actual, unconditional floor is the
+   * browser-enforced `min-width: 300px` on .panel, which still applies
+   * even if this function were ever skipped or given a bad value.
+   *
+   * @param {number} [fraction] — left panel's share, 0..1. Defaults to the
+   *                              currently-stored config value, or 0.5.
+   * @returns {number} the effective, floor-clamped fraction that was
+   *                    actually applied — callers should persist THIS,
+   *                    not their raw input, so a value recorded mid-drag
+   *                    reflects what was visually shown.
+   */
+  function _applyPanelSplit(fraction) {
+    const f = typeof fraction === 'number' && fraction > 0 && fraction < 1
+      ? fraction
+      : (appState.config.panelSplit || 0.5);
+
+    const totalWidth     = dom.panelsArea.clientWidth;
+    const availableWidth = Math.max(0, totalWidth - DIVIDER_PX);
+
+    // Single source of truth for "are we in the narrow-window edge case":
+    // toggle our OWN class rather than relying on the browser's native
+    // overflow:auto heuristic to decide independently whether a scrollbar
+    // is needed. Letting CSS auto-detection and our own width-driven
+    // flexBasis math both react to the same boundary, on every resize
+    // event, is what caused a visible flicker — this makes it one
+    // decision instead of two.
+    const needsScroll = availableWidth < PANEL_MIN_PX * 2;
+    dom.panelsArea.classList.toggle('overflow-scroll', needsScroll);
+
+    let leftPx = f * availableWidth;
+
+    // Clamp so each side gets at least PANEL_MIN_PX, whenever the window is
+    // wide enough to honour both floors simultaneously. Below that
+    // threshold (the needsScroll case above), each side gets exactly half
+    // of whatever's available instead of an arbitrary unclamped value —
+    // the browser's own min-width:300px on .panel is what actually forces
+    // the rendered width up to 300px in that case, and #panels-area now
+    // scrolls because WE said it should, not because auto guessed it.
+    const minSide = needsScroll ? availableWidth / 2 : PANEL_MIN_PX;
+    leftPx = Math.max(minSide, Math.min(availableWidth - minSide, leftPx));
+
+    const rightPx = availableWidth - leftPx;
+
+    pd('left').panel.style.flexBasis  = leftPx  + 'px';
+    pd('right').panel.style.flexBasis = rightPx + 'px';
+
+    return availableWidth > 0 ? leftPx / availableWidth : f;
+  }
+
+  // Synchronous guard, independent of appState.busy (which only flips true
+  // after the WS round-trip confirms the worker is running — too slow to
+  // prevent two calls fired milliseconds apart, before that round-trip
+  // completes). This is purely local bookkeeping for this one function.
+  let _panelSplitSaveInFlight = false;
+
+  /**
+   * Persist the given fraction to config.json via the lightweight
+   * save-config task — no panel refresh needed, this is a pure preference
+   * write, same pattern used for every other dialog-remembered setting.
+   *
+   * Guards against firing a second assign while the previous one is still
+   * in flight — see _panelSplitSaveInFlight above. The movement-based drag
+   * detection on mouseup (see the divider's mousedown/mousemove/mouseup
+   * wiring) is what actually prevents most of this from ever being
+   * triggered in the first place; this guard is a second layer in case
+   * something still calls this function in rapid succession.
+   */
+  function _persistPanelSplit(fraction) {
+    appState = { ...appState, config: { ...appState.config, panelSplit: fraction } };
+    if (_panelSplitSaveInFlight) return;
+    _panelSplitSaveInFlight = true;
+    adapter.assign('worker/tasks/save-config.js', { panelSplit: fraction })
+      .catch(() => {})
+      .finally(() => { _panelSplitSaveInFlight = false; });
+  }
+
+  dom.panelDivider.addEventListener('mousedown', e => {
+    e.preventDefault();
+    const totalWidth     = dom.panelsArea.clientWidth;
+    const availableWidth = Math.max(1, totalWidth - DIVIDER_PX);
+    const areaRect        = dom.panelsArea.getBoundingClientRect();
+
+    // moved=false until mousemove actually reports a meaningful position
+    // change — see the comment on mouseup below for why this matters.
+    _dividerDrag = { areaLeft: areaRect.left, availableWidth, moved: false };
+    dom.panelDivider.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!_dividerDrag) return;
+    const { areaLeft, availableWidth } = _dividerDrag;
+    const fraction = (e.clientX - areaLeft) / availableWidth;
+    // Clamp to [0,1] before applying — _applyPanelSplit further clamps for
+    // the 300px floor, but a raw fraction outside 0..1 (dragging past the
+    // edges of the panel area) shouldn't even be considered valid input.
+    const clamped  = Math.max(0, Math.min(1, fraction));
+    const effective = _applyPanelSplit(clamped);
+    appState = { ...appState, config: { ...appState.config, panelSplit: effective } };
+    _dividerDrag.moved = true;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!_dividerDrag) return;
+    // A plain click (mousedown immediately followed by mouseup, with no
+    // mousemove in between) is NOT a drag — most notably, the two
+    // click-pairs that make up a double-click each land here with zero
+    // movement. Without this guard, every double-click on the divider
+    // fired two extra, spurious save-config assigns racing the dblclick
+    // handler's own persist, occasionally overlapping the worker's
+    // still-running previous assign ("Cannot assign task while in
+    // state: done/running"). Only persist if a real drag happened.
+    const wasRealDrag = _dividerDrag.moved;
+    _dividerDrag = null;
+    dom.panelDivider.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    if (wasRealDrag) {
+      _persistPanelSplit(appState.config.panelSplit || 0.5);
+    }
+  });
+
+  dom.panelDivider.addEventListener('dblclick', () => {
+    const effective = _applyPanelSplit(0.5);
+    _persistPanelSplit(effective);
+  });
+
+  // Re-apply the stored fraction (not a frozen pixel value) on window
+  // resize, so both panels grow/shrink together proportionally and the
+  // 300px floor is re-checked against the new width.
+  window.addEventListener('resize', () => {
+    _applyPanelSplit(appState.config.panelSplit);
+  });
 
   // ─── Navigate ─────────────────────────────────────────────────────────────────
 
@@ -143,6 +296,7 @@
           if (payload.config) {
             appState = { ...appState, config: payload.config };
             dom.html.setAttribute('data-theme', payload.config.theme || 'dark');
+            _applyPanelSplit(payload.config.panelSplit);
           }
           if (payload.platform) {
             appState = { ...appState, platform: payload.platform };
@@ -365,6 +519,12 @@
         el.appendChild(gap);
       }
     });
+
+    // The breadcrumb can now overflow horizontally in a narrow panel (same
+    // treatment as .tabs-bar) — default the scroll position to the END, so
+    // the current directory (the segment users almost always care about)
+    // is what's visible at a glance, rather than the volume root.
+    el.scrollLeft = el.scrollWidth;
   }
 
   function buildCrumbsFromPath(dirPath) {

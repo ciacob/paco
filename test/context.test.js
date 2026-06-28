@@ -138,6 +138,34 @@ describe('config', () => {
     assert.equal(cfg.theme, 'dark');
     assert.equal(cfg.showHidden, false);
     assert.equal(cfg.sortBy, 'name');
+    assert.equal(cfg.panelSplit, 0.5);
+  });
+
+  test('writeConfig persists a custom panelSplit', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    ctx.writeConfig(Object.assign(ctx.readConfig(), { panelSplit: 0.35 }));
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.panelSplit, 0.35);
+  });
+
+  test('updateConfig can update panelSplit without disturbing other keys', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    ctx.updateConfig({ panelSplit: 0.7 });
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.panelSplit, 0.7);
+    assert.equal(cfg.theme, 'dark'); // unchanged default
+  });
+
+  test('readConfig fills in panelSplit default when missing from an older config file', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    const raw = JSON.parse(fs.readFileSync(ctx.PATHS.config, 'utf8'));
+    delete raw.panelSplit;
+    fs.writeFileSync(ctx.PATHS.config, JSON.stringify(raw), 'utf8');
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.panelSplit, 0.5);
   });
 
   test('writeConfig persists values', () => {
