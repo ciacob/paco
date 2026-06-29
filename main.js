@@ -157,6 +157,19 @@ function spawnWorker() {
         break;
       }
 
+      case EVT.CALC_RESULT:
+        // Independent of the worker's idle/running/done state machine —
+        // see shared/messages.js's comment on EVT.CALC_RESULT. Relayed
+        // straight through to the server, bypassing updateState/workerState
+        // entirely, since this has nothing to do with what the worker is
+        // currently doing (it may well be idle, or busy with something
+        // else entirely, by the time this arrives).
+        log('worker', 'calc result', envelope.payload);
+        if (serverProc && serverProc.connected) {
+          serverProc.send(msg(SRV.CALC_RESULT, envelope.payload));
+        }
+        break;
+
       default:
         log('worker', 'unknown event type:', envelope.type);
     }

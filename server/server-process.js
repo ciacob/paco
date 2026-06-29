@@ -104,6 +104,15 @@ process.on('message', (envelope) => {
     if (latestWorkerState.state === 'idle') {
       watcher.update();
     }
+  } else if (envelope.type === SRV.CALC_RESULT) {
+    // Independent of latestWorkerState/STATE_PUSH entirely — see
+    // shared/messages.js's comment on EVT.CALC_RESULT for why. Broadcast
+    // directly, same pattern as the watcher's {state:'watch', ...}
+    // messages: a discriminable `state` field lets the browser's single
+    // WS handler tell this apart from the normal idle/running/done pushes
+    // without needing a second message channel.
+    const { calcId, panel, result } = envelope.payload || {};
+    require('./ws/status-feed').broadcast({ state: 'calc-result', calcId, panel, result });
   }
 });
 

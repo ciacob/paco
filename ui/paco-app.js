@@ -457,6 +457,118 @@
   let _viewerDetailsInFlight = false;
   const _viewerDetailsPending = []; // [{ side, path }, ...], FIFO
 
+  // Per-side size-calculation state. Keyed by a "signature" string derived
+  // from the exact set of paths being measured (sorted, joined) — NOT just
+  // "in flight or not" — so a re-render triggered by something unrelated
+  // (e.g. the OTHER panel's selection changing) doesn't throw away an
+  // already-finished result or an in-flight calculation for THIS side,
+  // the same general cache-by-identity idea as _viewerDetailsCache above.
+  //
+  // Shape while idle (never calculated, or stale): null
+  // Shape while running: { signature, status: 'running', calcId }
+  // Shape once done:     { signature, status: 'done', bytes }
+  // Shape on failure:    { signature, status: 'error' }
+  const _calcState = { left: null, right: null };
+
+  /**
+   * Build a stable identity string for a set of paths, so the calc cache
+   * can tell "is this still about the same selection" across re-renders.
+   * @param {string[]} paths
+   * @returns {string}
+   */
+  function _calcSignature(paths) {
+    return paths.slice().sort().join('\u0000');
+  }
+
+  /**
+   * Fire-and-forget cancel for whatever calculation is currently running on
+   * the given side, if any. Per the F3 design: no result is awaited or
+   * expected back from this — the UI already reverts its own state
+   * immediately on the same action that triggered the cancellation (a
+   * selection change), rather than waiting for any round-trip. A stray
+   * result that the child manages to report in the brief window before the
+   * kill signal takes effect is simply discarded by _handleCalcResult's own
+   * calcId check, same as any other stale-result case.
+   */
+  function _cancelCalcIfRunning(side) {
+    const state = _calcState[side];
+    if (!state || state.status !== 'running' || !state.calcId) return;
+    adapter.assign('worker/tasks/cancel-calc.js', { calcId: state.calcId }).catch(() => {});
+  }
+
+  /**
+   * Start a size calculation for the given side + paths. Called from the
+   * Calculate button's click handler. Updates _calcState to 'running'
+   * immediately (synchronously) and re-renders so the button is replaced
+   * by a spinner before adapter.assign's own HTTP round-trip even
+   * resolves — there is no other path back to the idle button for this
+   * side except a selection change (per the design: no separate
+   * Cancel-button affordance for v1).
+   */
+  async function _startCalc(side, paths) {
+    const signature = _calcSignature(paths);
+    _calcState[side] = { signature, status: 'running', calcId: null };
+    renderViewer();
+
+    // adapter.assign()'s own resolved value is just a generic REST
+    // acknowledgment ({accepted:true}) — the task's actual ctx.done()
+    // result (the calcId we need) only arrives later via the WS done
+    // event, same _resultResolve round-trip pattern as every other
+    // "I need this task's real result" case elsewhere in this file.
+    adapter.assign('worker/tasks/calc-size.js', { panel: side, paths }).catch(err => {
+      if (appState._calcStartResolve) {
+        const resolve = appState._calcStartResolve;
+        appState = { ...appState, _calcStartResolve: null };
+        resolve({ ok: false, error: err.message });
+      }
+    });
+
+    const outcome = await new Promise(resolve => {
+      appState = { ...appState, _calcStartResolve: resolve };
+    });
+
+    // Only apply if this is still the calculation we're tracking for this
+    // side — a selection change (which clears/replaces _calcState[side])
+    // may have happened during the round-trip.
+    const current = _calcState[side];
+    if (!current || current.signature !== signature) return;
+
+    if (!outcome.ok || !outcome.result || !outcome.result.calcId) {
+      // The task itself failed to even start the calculation (e.g. the
+      // spawn failed) — revert to idle so the user can retry.
+      _calcState[side] = null;
+      renderViewer();
+      return;
+    }
+
+    _calcState[side] = { signature, status: 'running', calcId: outcome.result.calcId };
+  }
+
+  /**
+   * Handle the calc-result WS notification (see the boot-trigger switch's
+   * 'calc-result' branch). This can arrive at any arbitrary time, fully
+   * decoupled from the worker's own idle/running/done state machine — see
+   * shared/messages.js's EVT.CALC_RESULT comment.
+   *
+   * Discards silently (per the design) if the calcId no longer matches
+   * what's tracked for that panel — covers every stale-result case
+   * uniformly: selection changed and a new calc started, the Viewer was
+   * closed and reopened, or this is exactly the small race window after an
+   * explicit cancel.
+   */
+  function _handleCalcResult(calcId, panel, result) {
+    const side = panel === 'right' ? 'right' : 'left';
+    const current = _calcState[side];
+    if (!current || current.calcId !== calcId) return; // stale — discard
+
+    if (result && result.ok) {
+      _calcState[side] = { signature: current.signature, status: 'done', bytes: result.bytes };
+    } else {
+      _calcState[side] = { signature: current.signature, status: 'error' };
+    }
+    renderViewer();
+  }
+
   /**
    * Re-render the Viewer panel's content area from both panels' current
    * selection. Safe to call unconditionally (e.g. from every selection
@@ -478,6 +590,10 @@
     if (desc.mode === 'empty') {
       _viewerDetailsCache.left = null;
       _viewerDetailsCache.right = null;
+      _cancelCalcIfRunning('left');
+      _cancelCalcIfRunning('right');
+      _calcState.left = null;
+      _calcState.right = null;
       dom.viewerContent.classList.add('viewer-content-centered');
       const empty = document.createElement('div');
       empty.className = 'viewer-empty';
@@ -511,6 +627,25 @@
       const wantsPath = (col && col.kind === 'single') ? col.entry.path : null;
       if (!wantsPath || (cached && cached.path !== wantsPath)) {
         _viewerDetailsCache[side] = null;
+      }
+    }
+
+    // Same idea for the size-calculation cache, covering BOTH single-folder
+    // and multi-selection columns (size/Calculate applies to both, unlike
+    // the enrichment cache above which is single-item only). Cancels any
+    // in-flight calculation that no longer matches the current selection —
+    // see the F3 design discussion: a selection change is the cancellation
+    // trigger, not a separate button or timeout.
+    for (const side of ['left', 'right']) {
+      const col = desc.columns.find(c => c.side === side);
+      const wantsPaths = col
+        ? (col.kind === 'single' ? [col.entry.path] : col.entries.map(e => e.path))
+        : [];
+      const wantsSignature = _calcSignature(wantsPaths);
+      const cached = _calcState[side];
+      if (cached && cached.signature !== wantsSignature) {
+        if (cached.status === 'running') _cancelCalcIfRunning(side);
+        _calcState[side] = null;
       }
     }
 
@@ -769,19 +904,50 @@
   }
 
   /**
-   * Size row shell — Calculate button + result/spinner slot. The actual
-   * calc-size.js task wiring (spawn, cancel-on-selection-change, WS result
-   * notification) lands in a later pass; for now this renders the static
-   * shell so the layout is in place and confirmed before that work starts.
+   * Size row — renders one of four states from _calcState[side]:
+   *   idle/none → Calculate button (click starts the calculation)
+   *   running   → spinner (no Cancel button — see the F3 design
+   *               discussion; a selection change is the only cancellation
+   *               trigger for v1)
+   *   done      → the formatted result (fmtSizeVerbose)
+   *   error     → a short inline error message
    */
   function _renderViewerSizeRow(side, paths) {
     const row = document.createElement('div');
     row.className = 'viewer-size-row';
+
+    const state = _calcState[side];
+    const signature = _calcSignature(paths);
+    const isCurrent = state && state.signature === signature;
+
+    if (isCurrent && state.status === 'running') {
+      const spinner = document.createElement('span');
+      spinner.className = 'viewer-calc-spinner';
+      spinner.title = 'Calculating\u2026';
+      row.appendChild(spinner);
+      return row;
+    }
+
+    if (isCurrent && state.status === 'done') {
+      const result = document.createElement('span');
+      result.className = 'viewer-calc-result';
+      result.textContent = S.fmtSizeVerbose(state.bytes);
+      row.appendChild(result);
+      return row;
+    }
+
+    if (isCurrent && state.status === 'error') {
+      const err = document.createElement('span');
+      err.className = 'viewer-calc-error';
+      err.textContent = 'Could not calculate \u2014 see logs';
+      row.appendChild(err);
+      return row;
+    }
+
     const btn = document.createElement('button');
     btn.className = 'viewer-calc-btn';
     btn.textContent = 'Calculate';
-    btn.disabled = true; // enabled once calc-size.js wiring lands
-    btn.title = 'Coming soon';
+    btn.addEventListener('click', () => _startCalc(side, paths));
     row.appendChild(btn);
     return row;
   }
@@ -926,6 +1092,15 @@
         resolve({ ok: true, result });
       }
 
+      // F3 Viewer panel — calc-size.js's immediate { calcId } result (the
+      // ACTUAL calculation result arrives later, separately, via the
+      // calc-result WS message handled in the boot-trigger switch above).
+      if (appState._calcStartResolve) {
+        const resolve = appState._calcStartResolve;
+        appState = { ...appState, _calcStartResolve: null };
+        resolve({ ok: true, result });
+      }
+
       // Continue draining watch queue if more panels need refreshing
       if (appState._watchQueue && appState._watchQueue.length > 0) {
         adapter.reset().then(() => _drainWatchQueue()).catch(() => {});
@@ -979,6 +1154,10 @@
             const resolve = appState._viewerDetailsResolve;
             appState = { ...appState, _viewerDetailsResolve: null };
             resolve({ ok: false, error: errMsg || 'Unknown error' });
+          } else if (appState._calcStartResolve) {
+            const resolve = appState._calcStartResolve;
+            appState = { ...appState, _calcStartResolve: null };
+            resolve({ ok: false, error: errMsg || 'Unknown error' });
           } else {
             showError('Error', errMsg || 'Unknown error');
           }
@@ -1011,6 +1190,12 @@
         }, 200);
         appState = { ...appState, _watchPending: pending, _watchTimer: timer };
       }
+      return;
+    }
+
+    // ── F3 Viewer: size calculation result ────────────────────────────────
+    if (s === 'calc-result') {
+      _handleCalcResult(ws.calcId, ws.panel, ws.result);
       return;
     }
 

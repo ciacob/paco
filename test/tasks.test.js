@@ -2027,6 +2027,211 @@ describe('viewer-details task', () => {
   });
 });
 
+// ─── calc-size / cancel-calc tasks (F3 size calculation) ───────────────────────
+
+/**
+ * Stub process.send for the duration of a test — calc-size.js calls it to
+ * relay the child's eventual result. process.send is normally undefined
+ * outside an actual forked child (which is exactly the case for this test
+ * runner), so "restoring" it means deleting the stub again afterward, not
+ * putting back some prior real function.
+ *
+ * @returns {{ restore: Function, sent: object[] }}
+ */
+function stubProcessSend() {
+  const sent = [];
+  const had = Object.prototype.hasOwnProperty.call(process, 'send');
+  const original = process.send;
+  process.send = (envelope) => { sent.push(envelope); };
+  return {
+    sent,
+    restore() {
+      if (had) process.send = original;
+      else delete process.send;
+    },
+  };
+}
+
+describe('calc-size task', () => {
+  test('fails when no panel is specified', async () => {
+    purgeCache('worker/tasks/calc-size');
+    const task = require('../worker/tasks/calc-size');
+    const { ctx, promise } = makeCtx({ panel: '', paths: [workDir] });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no panel specified/i);
+  });
+
+  test('fails when no paths are specified', async () => {
+    purgeCache('worker/tasks/calc-size');
+    const task = require('../worker/tasks/calc-size');
+    const { ctx, promise } = makeCtx({ panel: 'left', paths: [] });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no items specified/i);
+  });
+
+  test('returns a calcId immediately without waiting for the calculation', async () => {
+    const target = path.join(workDir, 'calc-target.txt');
+    await mkfile(target, 'x'.repeat(123));
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/calc-size');
+    purgeCache('paco/calc-registry');
+    const registry = require('../paco/calc-registry');
+    const task = require('../worker/tasks/calc-size');
+    const { ctx, promise } = makeCtx({ panel: 'left', paths: [target] });
+
+    const start = Date.now();
+    task.start(ctx);
+    const { ok, result } = await promise;
+    const elapsed = Date.now() - start;
+
+    assert.ok(ok);
+    assert.equal(typeof result.calcId, 'string');
+    assert.ok(result.calcId.length > 0);
+    // Should resolve essentially instantly — it must not wait for the
+    // spawned child to actually finish calculating.
+    assert.ok(elapsed < 200, `took ${elapsed}ms — should return near-instantly`);
+
+    // Let the real child finish and report, then clean up
+    await new Promise(r => setTimeout(r, 600));
+    stub.restore();
+    assert.equal(registry.size(), 0, 'registry entry should be cleaned up after the child reports');
+  });
+
+  test('relays the correct byte count back via process.send once the child finishes', async () => {
+    const target = path.join(workDir, 'relay-target.txt');
+    await mkfile(target, 'x'.repeat(256));
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/calc-size');
+    purgeCache('paco/calc-registry');
+    const task = require('../worker/tasks/calc-size');
+    const { ctx, promise } = makeCtx({ panel: 'right', paths: [target] });
+
+    task.start(ctx);
+    const { result } = await promise;
+
+    await new Promise(r => setTimeout(r, 600));
+    stub.restore();
+
+    const relayed = stub.sent.find(e => e.type === 'EVT_CALC_RESULT');
+    assert.ok(relayed, 'should have relayed a CALC_RESULT message');
+    assert.equal(relayed.payload.calcId, result.calcId);
+    assert.equal(relayed.payload.panel, 'right');
+    assert.equal(relayed.payload.result.ok, true);
+    assert.equal(relayed.payload.result.bytes, 256);
+  });
+
+  test('sums a directory tree correctly end to end', async () => {
+    const dir = path.join(workDir, 'calc-dir');
+    await fsp.mkdir(path.join(dir, 'sub'), { recursive: true });
+    await mkfile(path.join(dir, 'a.txt'), 'x'.repeat(30));
+    await mkfile(path.join(dir, 'sub', 'b.txt'), 'x'.repeat(70));
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/calc-size');
+    purgeCache('paco/calc-registry');
+    const task = require('../worker/tasks/calc-size');
+    const { ctx, promise } = makeCtx({ panel: 'left', paths: [dir] });
+
+    task.start(ctx);
+    await promise;
+    await new Promise(r => setTimeout(r, 600));
+    stub.restore();
+
+    const relayed = stub.sent.find(e => e.type === 'EVT_CALC_RESULT');
+    assert.equal(relayed.payload.result.bytes, 100);
+  });
+
+  test('registers the spawned child in the registry under the returned calcId', async () => {
+    const target = path.join(workDir, 'registry-check.txt');
+    await mkfile(target, 'x'.repeat(1000000)); // large enough to still be running when we check
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/calc-size');
+    purgeCache('paco/calc-registry');
+    const registry = require('../paco/calc-registry');
+    const task = require('../worker/tasks/calc-size');
+    const { ctx, promise } = makeCtx({ panel: 'left', paths: [target] });
+
+    task.start(ctx);
+    const { result } = await promise;
+
+    // Immediately after the task resolves, the registry should already
+    // have the entry (registered synchronously, before ctx.done() fires).
+    assert.ok(registry.get(result.calcId), 'registry should have an entry for the returned calcId');
+
+    await new Promise(r => setTimeout(r, 600));
+    stub.restore();
+  });
+});
+
+describe('cancel-calc task', () => {
+  test('fails when no calcId is specified', async () => {
+    purgeCache('worker/tasks/cancel-calc');
+    const task = require('../worker/tasks/cancel-calc');
+    const { ctx, promise } = makeCtx({ calcId: '' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no calculation id specified/i);
+  });
+
+  test('reports cancelled:false for an unknown calcId (not an error)', async () => {
+    purgeCache('worker/tasks/cancel-calc');
+    const task = require('../worker/tasks/cancel-calc');
+    const { ctx, promise } = makeCtx({ calcId: 'this-id-does-not-exist' });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.cancelled, false);
+  });
+
+  test('kills the real child process and removes the registry entry', async () => {
+    const target = path.join(workDir, 'cancel-target-dir');
+    await fsp.mkdir(target);
+    // A reasonably sized tree so the child is still alive when we cancel
+    for (let i = 0; i < 30; i++) {
+      await mkfile(path.join(target, `f${i}.txt`), 'x'.repeat(2000));
+    }
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/calc-size');
+    purgeCache('worker/tasks/cancel-calc');
+    purgeCache('paco/calc-registry');
+    const registry  = require('../paco/calc-registry');
+    const calcSize   = require('../worker/tasks/calc-size');
+    const cancelCalc = require('../worker/tasks/cancel-calc');
+
+    const { ctx: ctx1, promise: p1 } = makeCtx({ panel: 'left', paths: [target] });
+    calcSize.start(ctx1);
+    const { result } = await p1;
+
+    const child = registry.get(result.calcId);
+    assert.ok(child, 'child should be registered');
+
+    const { ctx: ctx2, promise: p2 } = makeCtx({ calcId: result.calcId });
+    cancelCalc.start(ctx2);
+    const { ok, result: cancelResult } = await p2;
+
+    assert.ok(ok);
+    assert.equal(cancelResult.cancelled, true);
+    assert.equal(registry.get(result.calcId), undefined, 'registry entry should be removed immediately on cancel');
+
+    // Give the kill signal a moment to actually take effect, then confirm
+    // no CALC_RESULT was ever relayed for this calcId — the child died
+    // before it could report.
+    await new Promise(r => setTimeout(r, 500));
+    stub.restore();
+    const relayed = stub.sent.find(e => e.payload && e.payload.calcId === result.calcId);
+    assert.equal(relayed, undefined, 'a cancelled calculation must never relay a result');
+  });
+});
+
 // ─── navigate task ────────────────────────────────────────────────────────────
 
 describe('navigate task', () => {

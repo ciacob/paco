@@ -31,6 +31,12 @@ const EVT = {
   TASK_DONE:      'EVT_TASK_DONE',      // payload: { result: any }
   TASK_ERROR:     'EVT_TASK_ERROR',     // payload: { message, stack }
   TASK_PROGRESS:  'EVT_TASK_PROGRESS',  // payload: { percent, message? }
+  // Independent of the task done/error/progress flow and of the worker's
+  // own idle/running/done state machine — a calc-size.js task returns
+  // immediately without waiting for its spawned child, so this can arrive
+  // at any arbitrary later time, decoupled from whatever the worker
+  // happens to be doing when it does. See worker/tasks/calc-size.js.
+  CALC_RESULT:    'EVT_CALC_RESULT',    // payload: { calcId, panel, result }
 };
 
 // ─── Internal: server-process ↔ main ─────────────────────────────────────────
@@ -40,6 +46,8 @@ const SRV = {
   READY:          'SRV_READY',          // payload: { port, host }
   // main → server  (state pushes)
   STATE_PUSH:     'SRV_STATE_PUSH',     // payload: WorkerStatus
+  // main → server  (independent of STATE_PUSH — see EVT.CALC_RESULT)
+  CALC_RESULT:    'SRV_CALC_RESULT',    // payload: { calcId, panel, result }
 };
 
 // ─── Worker state machine values ─────────────────────────────────────────────
