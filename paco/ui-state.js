@@ -43,6 +43,10 @@ function makeAppState(overrides = {}) {
     activePanel: 'left',
     busy:        false,
     bootPhase:   'idle',   // 'idle' | 'booting-left' | 'booting-right' | 'ready'
+    // Viewer panel (F3) visibility — deliberately session-only, never
+    // persisted (see context.js's viewerSplit comment for why). Every
+    // session starts with the Viewer closed.
+    viewerOpen: false,
     // The worker's actual OS, learned from the first navigate result.
     // Defaults to 'other' (i.e. "assume not macOS") until that arrives, so
     // macOS-only behaviour (like bundle-folder detection) never fires on a

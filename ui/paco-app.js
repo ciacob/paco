@@ -33,6 +33,7 @@
 
   const dom = {
     html:       document.documentElement,
+    topBar:     $('top-bar'),
     connDot:    $('conn-dot'),
     busyBar:    $('busy-bar'),
     busyMsg:    $('busy-msg'),
@@ -56,6 +57,10 @@
     fkDelete:   $('fk-delete'),
     panelsArea:   $('panels-area'),
     panelDivider: $('panel-divider'),
+    viewerDivider: $('viewer-divider'),
+    viewerPanel:   $('viewer-panel'),
+    viewerClose:   $('viewer-close'),
+    fkeyBar:       $('fkey-bar'),
   };
 
   function pd(side) {
@@ -73,8 +78,10 @@
 
   // ─── Panel divider (drag-to-resize) ───────────────────────────────────────────
 
-  const PANEL_MIN_PX = 300;
+  const PANEL_MIN_PX  = 300; // horizontal floor — twin list panels' width
   const DIVIDER_PX    = 3;
+  const VIEWER_MIN_PX = 250; // vertical floor — list-panels-region/Viewer height
+  const VIEWER_DIVIDER_PX = 3;
 
   // Tracks the in-progress drag, if any. null when not dragging.
   let _dividerDrag = null;
@@ -220,6 +227,166 @@
   // 300px floor is re-checked against the new width.
   window.addEventListener('resize', () => {
     _applyPanelSplit(appState.config.panelSplit);
+    if (appState.viewerOpen) _applyViewerSplit(appState.config.viewerSplit);
+  });
+
+  // ─── Viewer panel (F3) ──────────────────────────────────────────────────────
+
+  // Tracks the in-progress vertical drag, if any. null when not dragging.
+  let _viewerDrag = null;
+
+  /**
+   * Compute and apply pixel flex-basis values for the twin-list-panels
+   * region and the Viewer panel, from a 0..1 fraction (the list panels'
+   * share of the available height). Same pixel-not-percentage rationale,
+   * same floor-clamp shape, same effective-fraction return contract as
+   * _applyPanelSplit — see that function's doc comment for the full
+   * reasoning, all of which applies here unchanged, just on the Y axis.
+   *
+   * Only meaningful (and only ever called) while the Viewer is open —
+   * when closed, #panels-area reverts to flex:1 1 0 (fill everything) and
+   * neither this nor the Viewer panel's own basis matters.
+   *
+   * @param {number} [fraction] — list panels' share, 0..1. Defaults to the
+   *                              currently-stored config value, or 0.5.
+   * @returns {number} the effective, floor-clamped fraction actually applied.
+   */
+  function _applyViewerSplit(fraction) {
+    const f = typeof fraction === 'number' && fraction > 0 && fraction < 1
+      ? fraction
+      : (appState.config.viewerSplit || 0.5);
+
+    const availableHeight = _measureViewerAvailableHeight();
+
+    const needsScroll = availableHeight < VIEWER_MIN_PX * 2;
+    // Mirrors #panels-area's own overflow-scroll toggle, but on the
+    // document/body level for the vertical axis — see the CSS comment on
+    // body for why this is a class toggle rather than a bare overflow:auto.
+    document.body.classList.toggle('viewer-overflow-scroll', needsScroll);
+
+    let topPx = f * availableHeight;
+    const minSide = needsScroll ? availableHeight / 2 : VIEWER_MIN_PX;
+    topPx = Math.max(minSide, Math.min(availableHeight - minSide, topPx));
+
+    const bottomPx = availableHeight - topPx;
+
+    dom.panelsArea.style.flex      = `0 0 ${topPx}px`;
+    dom.viewerPanel.style.flexBasis = bottomPx + 'px';
+
+    return availableHeight > 0 ? topPx / availableHeight : f;
+  }
+
+  /**
+   * The true total height available to split between #panels-area and
+   * #viewer-panel, measured from STABLE references (body's own height
+   * minus the other fixed-height chrome) rather than summing the two
+   * regions' own current rendered heights.
+   *
+   * Summing the two regions' own heights would seem simpler, but it's
+   * wrong on a window resize: those heights reflect whatever was last
+   * applied, not the new total after the window changed size — summing
+   * two stale values just reproduces the old (now-incorrect) total,
+   * silently failing to adapt. Measuring against body/topBar/busyBar/
+   * fkeyBar — none of which we ever resize ourselves — sidesteps that
+   * entirely, since those are always correct regardless of how many times
+   * #panels-area/#viewer-panel have been resized before this call.
+   *
+   * @returns {number} available height in pixels, minus the divider.
+   */
+  function _measureViewerAvailableHeight() {
+    const totalHeight = dom.html.clientHeight
+      - dom.topBar.offsetHeight
+      - dom.busyBar.offsetHeight
+      - dom.fkeyBar.offsetHeight;
+    return Math.max(1, totalHeight - VIEWER_DIVIDER_PX);
+  }
+
+  // Synchronous guard, same rationale as _panelSplitSaveInFlight.
+  let _viewerSplitSaveInFlight = false;
+
+  function _persistViewerSplit(fraction) {
+    appState = { ...appState, config: { ...appState.config, viewerSplit: fraction } };
+    if (_viewerSplitSaveInFlight) return;
+    _viewerSplitSaveInFlight = true;
+    adapter.assign('worker/tasks/save-config.js', { viewerSplit: fraction })
+      .catch(() => {})
+      .finally(() => { _viewerSplitSaveInFlight = false; });
+  }
+
+  dom.viewerDivider.addEventListener('mousedown', e => {
+    e.preventDefault();
+    if (!appState.viewerOpen) return;
+    _viewerDrag = { startY: e.clientY, moved: false };
+    dom.viewerDivider.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!_viewerDrag) return;
+    // Re-measure on every move via the same stable measurement
+    // _applyViewerSplit itself uses (see _measureViewerAvailableHeight) —
+    // not by summing #panels-area/#viewer-panel's own current heights,
+    // which would reproduce whatever total was last applied rather than
+    // reacting correctly if anything changed it in the meantime.
+    const areaRect = dom.panelsArea.getBoundingClientRect();
+    const availableHeight = _measureViewerAvailableHeight();
+    const fraction = (e.clientY - areaRect.top) / availableHeight;
+    const clamped  = Math.max(0, Math.min(1, fraction));
+    const effective = _applyViewerSplit(clamped);
+    appState = { ...appState, config: { ...appState.config, viewerSplit: effective } };
+    _viewerDrag.moved = true;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!_viewerDrag) return;
+    // Same plain-click guard as the horizontal divider — see that
+    // mouseup handler's comment for the full rationale (a double-click's
+    // two click-pairs must not each be treated as a completed drag).
+    const wasRealDrag = _viewerDrag.moved;
+    _viewerDrag = null;
+    dom.viewerDivider.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    if (wasRealDrag) {
+      _persistViewerSplit(appState.config.viewerSplit || 0.5);
+    }
+  });
+
+  dom.viewerDivider.addEventListener('dblclick', () => {
+    if (!appState.viewerOpen) return;
+    const effective = _applyViewerSplit(0.5);
+    _persistViewerSplit(effective);
+  });
+
+  /**
+   * Show or hide the Viewer panel. Visibility itself is session-only and
+   * never persisted (see the config.js comment on viewerSplit) — only the
+   * split position is, for whenever it's reopened. Toggling updates the
+   * F3 button's inverted-color "on" state too.
+   */
+  function toggleViewer(forceState) {
+    const next = typeof forceState === 'boolean' ? forceState : !appState.viewerOpen;
+    appState = { ...appState, viewerOpen: next };
+
+    dom.fkView.classList.toggle('toggled-on', next);
+    dom.panelsArea.classList.toggle('no-viewer', !next);
+
+    if (next) {
+      dom.viewerDivider.style.display = 'block';
+      dom.viewerPanel.style.display   = 'flex';
+      _applyViewerSplit(appState.config.viewerSplit);
+    } else {
+      dom.viewerDivider.style.display = 'none';
+      dom.viewerPanel.style.display   = 'none';
+      // Hand the full flexible region back to the twin list panels.
+      dom.panelsArea.style.flex = '1 1 0';
+      document.body.classList.remove('viewer-overflow-scroll');
+    }
+  }
+
+  dom.fkView.addEventListener('click', () => toggleViewer());
+  dom.viewerClose.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleViewer(false);
   });
 
   // ─── Navigate ─────────────────────────────────────────────────────────────────
@@ -650,7 +817,10 @@
     const side    = appState.activePanel;
     const sel     = selArray(side);
     const enabled = S.fkeyEnabledState(sel, appState.busy);
-    dom.fkView.disabled   = !enabled.view;
+    // fk-view (F3/Toggle Viewer) is deliberately NOT gated here — it's a
+    // pure UI visibility toggle, always enabled regardless of selection,
+    // panel writability, or busy state (toggling a panel doesn't touch
+    // the filesystem or the worker at all).
     dom.fkCopy.disabled   = !enabled.copy;
     dom.fkMove.disabled   = !enabled.move;
     dom.fkMkdir.disabled  = !enabled.mkdir;
@@ -1604,6 +1774,7 @@
     const side  = appState.activePanel;
     const other = side === 'left' ? 'right' : 'left';
     if (e.key === 'F2')                              { e.preventDefault(); refreshBoth(); }
+    else if (e.key === 'F3')                         { e.preventDefault(); toggleViewer(); }
     else if (e.key === 'F4' && e.shiftKey)           { e.preventDefault(); cmdCreateFile(); }
     else if (e.key === 'F4')                         { e.preventDefault(); cmdOpenWith(); }
     else if (e.key === 'F5')                         { e.preventDefault(); cmdCopy(); }
@@ -1627,7 +1798,6 @@
     }
   });
 
-  dom.fkView.addEventListener('click',   () => showError('Coming soon', 'View not yet implemented'));
   dom.fkNewFile.addEventListener('click', cmdCreateFile);
   dom.fkEdit.addEventListener('click',   cmdOpenWith);
   dom.fkCopy.addEventListener('click',   cmdCopy);

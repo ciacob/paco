@@ -136,10 +136,19 @@ const DEFAULT_CONFIG = {
 
   // Twin-panel divider position, as the left panel's share of the
   // available width (0..1). Persisted on drag-end and on double-click
-  // reset. The 250px-per-panel minimum is enforced live at render time,
+  // reset. The 300px-per-panel minimum is enforced live at render time,
   // not baked into this stored value, so it stays meaningful across
   // different window sizes.
   panelSplit: 0.5,
+
+  // Viewer panel (F3) divider position, as the twin-list-panels' share of
+  // the available HEIGHT when the Viewer is open (0..1; the Viewer panel
+  // itself gets 1 - viewerSplit). Same persistence model as panelSplit —
+  // drag-end and double-click reset — and the same 300px-per-side minimum,
+  // just on the vertical axis. Viewer OPEN/CLOSED state itself is
+  // deliberately NOT persisted (see worker/tasks/save-config.js callers in
+  // paco-app.js) — only the split position is, for whenever it's reopened.
+  viewerSplit: 0.5,
 };
 
 // Maximum navigation history entries kept per panel

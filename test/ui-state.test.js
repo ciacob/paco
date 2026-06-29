@@ -20,6 +20,7 @@ describe('makeAppState', () => {
     assert.equal(s.activePanel, 'left');
     assert.equal(s.busy, false);
     assert.equal(s.bootPhase, 'idle');
+    assert.equal(s.viewerOpen, false);
     assert.ok(s.panels.left);
     assert.ok(s.panels.right);
     assert.equal(s.config.theme, 'dark');
@@ -29,6 +30,11 @@ describe('makeAppState', () => {
     const s = S.makeAppState({ activePanel: 'right', busy: true });
     assert.equal(s.activePanel, 'right');
     assert.equal(s.busy, true);
+  });
+
+  test('viewerOpen can be overridden too', () => {
+    const s = S.makeAppState({ viewerOpen: true });
+    assert.equal(s.viewerOpen, true);
   });
 });
 

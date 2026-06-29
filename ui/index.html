@@ -92,6 +92,15 @@
       flex-direction: column;
       height: 100vh;
     }
+    /* Same rationale as #panels-area.overflow-scroll, on the vertical axis:
+       applied by JS (see _applyViewerSplit) only when the twin-list-panels'
+       and Viewer panel's combined 250px floors genuinely exceed the
+       available height with the Viewer open — a single source of truth
+       rather than letting a native overflow:auto heuristic react to the
+       same boundary independently. */
+    body.viewer-overflow-scroll {
+      overflow-y: auto;
+    }
 
     /* Top bar */
     #top-bar {
@@ -188,10 +197,26 @@
 
     /* Panels area */
     #panels-area {
+      /* flex grows to fill all available height when the Viewer panel is
+         closed (today's only mode). When the Viewer opens, JS switches
+         this to an explicit pixel flex-basis instead (see
+         _applyViewerSplit in paco-app.js) — same dual-mode pattern as the
+         twin list panels' own width handling, one level up the tree. */
       flex: 1 1 0;
+      min-height: 250px;
       display: flex;
       overflow-x: hidden;
       overflow-y: hidden;
+      /* No border-bottom here — see #panels-area.no-viewer below. This
+         border is only correct when the Viewer panel is closed (where
+         #panels-area sits directly above #fkey-bar and needs a seam).
+         When the Viewer is open, #viewer-divider itself is the seam
+         between #panels-area and #viewer-panel; adding this border on
+         top of it would stack an extra 1px onto the divider's own 3px,
+         making the horizontal divider look thicker than the vertical
+         one even though both are defined as 3px. */
+    }
+    #panels-area.no-viewer {
       border-bottom: 1px solid var(--border);
     }
     /* Applied by JS (see _applyPanelSplit) only when the combined 300px
@@ -237,6 +262,69 @@
       background: var(--bg);
     }
     .panel.active { background: var(--active-panel); }
+
+    /* Horizontal divider between the twin list panels and the Viewer panel
+       (F3) — same drag-to-resize mechanics as #panel-divider, just on the
+       Y axis. See _applyViewerSplit in paco-app.js. */
+    #viewer-divider {
+      display: none; /* shown alongside #viewer-panel by toggleViewer() */
+      height: 3px;
+      background: var(--border);
+      cursor: row-resize;
+      flex-shrink: 0;
+      transition: background var(--transition);
+    }
+    #viewer-divider.dragging { background: var(--accent2); transition: none; }
+    #viewer-divider:hover    { background: var(--accent2); }
+
+    /* Viewer panel (F3) — a persistent, toggle-able panel below the twin
+       list panels, not a floating dialog. Hidden by default; shown via
+       toggleViewer(). When visible, its height (and the list panels' own
+       height) are driven live by JS as pixel flex-basis values, exactly
+       the same pattern as the horizontal twin-panel split — see the
+       .panel CSS comment above for why pixels rather than percentages. */
+    #viewer-panel {
+      display: none;
+      flex: 0 0 50%;
+      min-height: 250px;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+    }
+    #viewer-title-row {
+      flex: 0 0 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 8px 0 12px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      user-select: none;
+    }
+    #viewer-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text2);
+    }
+    /* Same visual treatment as .tab-close, except always visible — this
+       close button has no parent-hover gate, unlike tabs' (intentional;
+       see the F3 feature discussion). */
+    .viewer-close {
+      opacity: 1;
+      font-size: 10px;
+      width: 18px; height: 18px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 3px;
+      cursor: pointer;
+      color: var(--text3);
+    }
+    .viewer-close:hover { background: var(--bg4); color: var(--err-color); }
+    #viewer-content {
+      flex: 1 1 0;
+      overflow: auto;
+      padding: 10px;
+    }
 
     /* Tabs */
     .tabs-bar {
@@ -475,6 +563,19 @@
       font-size: 12px; color: var(--fkey-text);
       text-align: center; line-height: 1.25;
       overflow-wrap: break-word;
+    }
+    /* Persistent toggle "on" state (currently just F3/Toggle Viewer) —
+       foreground and background trade places, a deliberately different
+       visual language from the --accent-based "active" treatments used
+       for tabs/selection elsewhere, since this is a standing mode toggle
+       rather than a momentary selection. */
+    .fkey.toggled-on {
+      background: var(--text);
+    }
+    .fkey.toggled-on:hover { background: var(--text); opacity: .85; }
+    .fkey.toggled-on .fkey-label,
+    .fkey.toggled-on .fkey-name {
+      color: var(--bg);
     }
 
     /* Overlay */
@@ -794,7 +895,7 @@
     <button id="busy-abort">✕ Abort</button>
   </div>
 
-  <div id="panels-area">
+  <div id="panels-area" class="no-viewer">
     <div class="panel active" id="panel-left" data-side="left">
       <div class="tabs-bar" id="tabs-left"></div>
       <div class="nav-bar">
@@ -836,8 +937,26 @@
     </div>
   </div>
 
+  <!-- Horizontal divider between the twin list panels and the Viewer panel.
+       Hidden along with the Viewer panel itself when the Viewer is closed —
+       see toggleViewer() in paco-app.js. -->
+  <div id="viewer-divider"></div>
+
+  <!-- Viewer panel (F3) — hidden by default, shown via toggleViewer().
+       Visibility is session-only (never persisted); only its size
+       (viewerSplit, see context.js) is. -->
+  <div id="viewer-panel">
+    <div id="viewer-title-row">
+      <span id="viewer-title">Viewer</span>
+      <span class="viewer-close" id="viewer-close" title="Close">✕</span>
+    </div>
+    <div id="viewer-content">
+      <div class="list-empty">Nothing to preview yet.</div>
+    </div>
+  </div>
+
   <div id="fkey-bar">
-    <button class="fkey" id="fk-view"  disabled><span class="fkey-label">F3</span><span class="fkey-name">View</span></button>
+    <button class="fkey" id="fk-view"><span class="fkey-label">F3</span><span class="fkey-name">Toggle Viewer</span></button>
     <button class="fkey" id="fk-newfile" disabled><span class="fkey-label">Shift+F4</span><span class="fkey-name">New File</span></button>
     <button class="fkey" id="fk-edit"  disabled><span class="fkey-label">F4</span><span class="fkey-name">Edit</span></button>
     <button class="fkey" id="fk-copy"  disabled><span class="fkey-label">F5</span><span class="fkey-name">Copy</span></button>

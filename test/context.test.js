@@ -168,6 +168,40 @@ describe('config', () => {
     assert.equal(cfg.panelSplit, 0.5);
   });
 
+  test('readConfig defaults viewerSplit to 0.5 on first boot', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.viewerSplit, 0.5);
+  });
+
+  test('writeConfig persists a custom viewerSplit', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    ctx.writeConfig(Object.assign(ctx.readConfig(), { viewerSplit: 0.65 }));
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.viewerSplit, 0.65);
+  });
+
+  test('updateConfig can update viewerSplit without disturbing other keys', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    ctx.updateConfig({ viewerSplit: 0.3 });
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.viewerSplit, 0.3);
+    assert.equal(cfg.panelSplit, 0.5); // unchanged default
+  });
+
+  test('readConfig fills in viewerSplit default when missing from an older config file', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    const raw = JSON.parse(fs.readFileSync(ctx.PATHS.config, 'utf8'));
+    delete raw.viewerSplit;
+    fs.writeFileSync(ctx.PATHS.config, JSON.stringify(raw), 'utf8');
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.viewerSplit, 0.5);
+  });
+
   test('writeConfig persists values', () => {
     const ctx = freshContext();
     ctx.bootstrap();
