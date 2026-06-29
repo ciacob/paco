@@ -442,6 +442,21 @@
   // item's path — cleared whenever that side's selection no longer matches.
   const _viewerDetailsCache = { left: null, right: null }; // { path, details } | null
 
+  // Serializes viewer-details.js requests through the single shared worker.
+  // Both panels can simultaneously want a fetch (e.g. toggling the Viewer
+  // open while both panels already have a single-item selection) — firing
+  // both adapter.assign() calls in the same synchronous tick races the
+  // worker's single-task queue, since appState.busy only flips true AFTER
+  // the WS round-trip confirms 'running', too slow to catch a same-tick
+  // second call (the exact TOCTOU gap already fixed twice before for other
+  // triggers — see _panelSplitSaveInFlight and _viewerSplitSaveInFlight).
+  // Unlike those simpler cases, we can't just skip a second request here —
+  // both sides genuinely need their data — so this queues it instead: at
+  // most one request in flight at a time, the next pending one (if any)
+  // starts only once the current request's own HTTP round-trip settles.
+  let _viewerDetailsInFlight = false;
+  const _viewerDetailsPending = []; // [{ side, path }, ...], FIFO
+
   /**
    * Re-render the Viewer panel's content area from both panels' current
    * selection. Safe to call unconditionally (e.g. from every selection
@@ -500,9 +515,9 @@
     }
 
     // Kick off async enrichment for any single-selection column that
-    // doesn't already have it cached. Skipped entirely while busy — see
-    // the call site for the rationale (avoids competing with whatever
-    // else might be using the single shared worker right now).
+    // doesn't already have it cached. Requests are queued (see
+    // _viewerDetailsInFlight/_viewerDetailsPending above) rather than fired
+    // directly, since both panels can want one on the very same render.
     for (const col of desc.columns) {
       if (col.kind !== 'single') continue;
       if (_viewerDetailsCache[col.side] && _viewerDetailsCache[col.side].path === col.entry.path) continue;
@@ -510,16 +525,56 @@
     }
   }
 
-  async function _fetchViewerDetails(side, targetPath) {
-    if (appState.busy) return; // see renderViewer()'s comment — skip, not queue
+  /**
+   * Public entry point: request enrichment for one side's single-selection
+   * item. Enqueues the request — see _viewerDetailsInFlight/_viewerDetailsPending
+   * for why this can't just fire adapter.assign() directly. Deduplicates
+   * against whatever's already queued/in-flight for the same side, so a
+   * rapid sequence of re-renders (e.g. while the async result for an
+   * earlier request is still pending) doesn't pile up redundant entries.
+   */
+  function _fetchViewerDetails(side, targetPath) {
+    // Drop any stale pending request for this side — only the latest
+    // selection for a side is worth fetching; an older queued one for a
+    // path that's no longer selected would just be wasted work.
+    for (let i = _viewerDetailsPending.length - 1; i >= 0; i--) {
+      if (_viewerDetailsPending[i].side === side) _viewerDetailsPending.splice(i, 1);
+    }
+    _viewerDetailsPending.push({ side, path: targetPath });
+    _drainViewerDetailsQueue();
+  }
 
-    adapter.assign('worker/tasks/viewer-details.js', { path: targetPath }).catch(err => {
+  function _drainViewerDetailsQueue() {
+    if (_viewerDetailsInFlight) return; // a request is already running — it
+                                          // will drain the next one itself
+                                          // when it finishes, see below.
+    if (appState.busy) return; // see renderViewer()'s original rationale —
+                                 // skip while the shared worker is doing
+                                 // something else entirely; a later render
+                                 // (e.g. once that operation completes and
+                                 // refreshes the panel) will re-request if
+                                 // the selection is still the same.
+    const next = _viewerDetailsPending.shift();
+    if (!next) return;
+
+    _viewerDetailsInFlight = true;
+    _runViewerDetailsFetch(next.side, next.path).finally(() => {
+      _viewerDetailsInFlight = false;
+      _drainViewerDetailsQueue(); // pick up whatever's next, if anything
+    });
+  }
+
+  async function _runViewerDetailsFetch(side, targetPath) {
+    try {
+      await adapter.assign('worker/tasks/viewer-details.js', { path: targetPath });
+    } catch (err) {
       if (appState._viewerDetailsResolve) {
         const resolve = appState._viewerDetailsResolve;
         appState = { ...appState, _viewerDetailsResolve: null };
         resolve({ ok: false, error: err.message });
       }
-    });
+      return;
+    }
 
     const outcome = await new Promise(resolve => {
       appState = { ...appState, _viewerDetailsResolve: resolve };
