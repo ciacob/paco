@@ -173,6 +173,14 @@ describe('stat', () => {
     assert.equal(e.size, 11);
   });
 
+  test('includes a created (birthtime) field', async () => {
+    const p = path.join(tmpDir, 'stat-created.txt');
+    await fsp.writeFile(p, 'x');
+    const e = await provider.stat(p);
+    assert.equal(typeof e.created, 'number');
+    assert.ok(e.created > 0);
+  });
+
   test('returns FsEntry for a directory', async () => {
     const p = path.join(tmpDir, 'stat-dir');
     await fsp.mkdir(p, { recursive: true });
@@ -184,6 +192,80 @@ describe('stat', () => {
   test('returns null for non-existent path', async () => {
     const e = await provider.stat(path.join(tmpDir, 'does-not-exist'));
     assert.equal(e, null);
+  });
+});
+
+// ─── statDetails ──────────────────────────────────────────────────────────────
+
+describe('statDetails', () => {
+  test('returns null for a non-existent path', async () => {
+    const r = await provider.statDetails(path.join(tmpDir, 'ghost-details.txt'));
+    assert.equal(r, null);
+  });
+
+  test('returns octal permissions for a real file',
+    { skip: process.platform === 'win32' }, async () => {
+      const p = path.join(tmpDir, 'perms-644.txt');
+      await fsp.writeFile(p, 'x');
+      await fsp.chmod(p, 0o644);
+      const r = await provider.statDetails(p);
+      assert.equal(r.octal, '644');
+      assert.equal(r.mode, 0o644);
+    });
+
+  test('octal reflects a different mode correctly',
+    { skip: process.platform === 'win32' }, async () => {
+      const p = path.join(tmpDir, 'perms-755.txt');
+      await fsp.writeFile(p, 'x');
+      await fsp.chmod(p, 0o755);
+      const r = await provider.statDetails(p);
+      assert.equal(r.octal, '755');
+    });
+
+  test('resolves an owner name on POSIX (falls back to numeric uid if unresolvable)',
+    { skip: process.platform === 'win32' }, async () => {
+      const p = path.join(tmpDir, 'owner-test.txt');
+      await fsp.writeFile(p, 'x');
+      const r = await provider.statDetails(p);
+      assert.equal(typeof r.owner, 'string');
+      assert.ok(r.owner.length > 0);
+    });
+
+  test('owner is null on Windows (no meaningful POSIX owner concept)',
+    { skip: process.platform !== 'win32' }, async () => {
+      const p = path.join(tmpDir, 'owner-win-test.txt');
+      await fsp.writeFile(p, 'x');
+      const r = await provider.statDetails(p);
+      assert.equal(r.owner, null);
+    });
+
+  test('isReadOnly is false by default on POSIX (meaningless there; octal is authoritative)',
+    { skip: process.platform === 'win32' }, async () => {
+      const p = path.join(tmpDir, 'readonly-posix-test.txt');
+      await fsp.writeFile(p, 'x');
+      const r = await provider.statDetails(p);
+      assert.equal(r.isReadOnly, false);
+    });
+
+  test('isExecutable reflects the real X_OK bit on POSIX',
+    { skip: process.platform === 'win32' || (process.getuid && process.getuid() === 0) },
+    async () => {
+      const p = path.join(tmpDir, 'exec-test.sh');
+      await fsp.writeFile(p, '#!/bin/sh\necho hi\n');
+      await fsp.chmod(p, 0o644); // explicitly NOT executable
+      const r1 = await provider.statDetails(p);
+      assert.equal(r1.isExecutable, false);
+      await fsp.chmod(p, 0o755);
+      const r2 = await provider.statDetails(p);
+      assert.equal(r2.isExecutable, true);
+    });
+
+  test('works for a directory too', async () => {
+    const p = path.join(tmpDir, 'details-dir');
+    await fsp.mkdir(p);
+    const r = await provider.statDetails(p);
+    assert.ok(r);
+    assert.equal(typeof r.octal, 'string');
   });
 });
 

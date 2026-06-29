@@ -324,6 +324,156 @@
       overflow: auto;
       padding: 10px;
     }
+    .viewer-empty {
+      color: var(--text3);
+      font-size: 12px;
+      padding: 20px;
+      text-align: center;
+    }
+    /* Applied to #viewer-content only while showing the empty-state message
+       (see renderViewer's 'empty' branch) — centers that single block both
+       ways, since #viewer-content's own layout (overflow:auto, padding)
+       doesn't otherwise center its content. Not applied for the normal
+       #viewer-columns case, which has its own per-column centering. */
+    #viewer-content.viewer-content-centered {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* Column layout — 1 column when only one panel has a selection, 2 when
+       both do. Columns are equal width, side by side.
+       height is JS-toggled between '100%' and 'auto' by _applyViewerFit():
+       100% (default) keeps vertical centering when content fits; auto lets
+       this grow past #viewer-content's box (which then scrolls normally)
+       when content is taller than the available space — centering and
+       scroll-driven overflow don't compose well in flexbox (align-items:
+       center clips an overflowing child symmetrically from both edges,
+       making a scrollbar that can't actually reach the true top/bottom),
+       so the two modes are kept mutually exclusive based on measured fit
+       rather than both active at once. */
+    #viewer-columns {
+      display: flex;
+      gap: 16px;
+      height: 100%;
+    }
+    .viewer-column {
+      flex: 1 1 0;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* Wraps everything actually rendered inside a column (location header,
+       tables, etc.) so .viewer-column's flex-centering centers the whole
+       block as a unit, rather than each row stretching to the column's
+       full width (which would leave the table hugging the left edge with
+       empty space to its right — exactly the imbalance this fixes). Deliber-
+       ately NOT width:100% — it needs to size to its own content so there's
+       actually room on either side for the parent to center it within. */
+    .column-info {
+      max-width: 100%;
+    }
+    .viewer-column-location {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text2);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      margin-bottom: 8px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--border);
+    }
+    /* Vertical-header detail table — labels right-aligned, values left-
+       aligned, per the spec. Used for both single- and multi-selection
+       (counts table, recent-additions table, recent-changes table all
+       reuse this same shape). */
+    .viewer-table {
+      width: auto;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin-bottom: 12px;
+    }
+    .viewer-table th {
+      text-align: right;
+      vertical-align: top;
+      color: var(--text3);
+      font-weight: 600;
+      padding: 3px 10px 3px 0;
+      white-space: nowrap;
+      width: 1%; /* shrink to content, give the rest to the value column */
+    }
+    .viewer-table td {
+      text-align: left;
+      vertical-align: top;
+      color: var(--text);
+      padding: 3px 0;
+      word-break: break-word;
+    }
+    .viewer-subtable-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      margin: 10px 0 4px;
+    }
+    /* 3x3 POSIX permission grid (owner/group/other x r/w/x) */
+    .viewer-perm-grid {
+      display: grid;
+      grid-template-columns: auto repeat(3, 56px);
+      gap: 2px 6px;
+      font-size: 11px;
+      align-items: center;
+      background: var(--bg2);
+      padding: 8px;
+      border-radius: 5px;
+    }
+    .viewer-perm-grid .viewer-perm-head {
+      color: var(--text3);
+      text-align: center;
+      font-weight: 600;
+    }
+    .viewer-perm-grid .viewer-perm-row-label {
+      color: var(--text3);
+      text-align: right;
+      padding-right: 4px;
+    }
+    .viewer-perm-grid .viewer-perm-cell {
+      text-align: center;
+      color: var(--text2);
+    }
+    .viewer-perm-cell.is-set { color: var(--accent); font-weight: 600; }
+    /* Size row (single-folder case only) — the Calculate button is taller
+       than plain text, so this row's label and value both get vertical
+       centering rather than the table's default top-alignment, which
+       otherwise looks unbalanced next to a button. */
+    .viewer-size-kv th,
+    .viewer-size-kv td {
+      vertical-align: middle;
+    }
+    /* Size row — value next to a Calculate button (folders / multi-select)
+       or just the plain formatted size (single file). Real calculation
+       wiring lands in a later pass; for now this renders the button shell
+       only. */
+    .viewer-size-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .viewer-calc-btn {
+      font-size: 11px;
+      padding: 3px 10px;
+      background: var(--bg3);
+      border: 1px solid var(--border2);
+      border-radius: 4px;
+      color: var(--text2);
+      cursor: pointer;
+    }
+    .viewer-calc-btn:hover { background: var(--bg4); }
+    .viewer-calc-result {
+      font-size: 12px;
+      color: var(--text);
+    }
 
     /* Tabs */
     .tabs-bar {

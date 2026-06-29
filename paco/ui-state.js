@@ -354,6 +354,28 @@ function fmtSize(bytes) {
 }
 
 /**
+ * Verbose size format for the Viewer panel's size-calculation result —
+ * deliberately distinct from fmtSize's compact file-list format, since
+ * this context calls for the full unit word plus the precise byte count
+ * in parentheses: "2.3 Mb (2,411,724 Bytes)". Not used anywhere fmtSize
+ * already is; changing fmtSize itself would alter the file-list display
+ * everywhere, which is out of scope here.
+ *
+ * @param {number} bytes
+ * @returns {string}
+ */
+function fmtSizeVerbose(bytes) {
+  if (bytes == null) return '';
+  const exact = bytes.toLocaleString('en-US') + ' Bytes';
+  if (bytes < 1024) return `${bytes} Bytes`;
+  let value, unit;
+  if (bytes < 1048576)         { value = bytes / 1024;        unit = 'Kb'; }
+  else if (bytes < 1073741824) { value = bytes / 1048576;     unit = 'Mb'; }
+  else                         { value = bytes / 1073741824;  unit = 'Gb'; }
+  return `${value.toFixed(1)} ${unit} (${exact})`;
+}
+
+/**
  * Format a millisecond timestamp for display.
  * @param {number} ms
  * @returns {string}
@@ -844,6 +866,120 @@ function prefixedName(name, existingNames) {
   return `(${Date.now()}) ${name}`;
 }
 
+// ─── Viewer panel (F3) ──────────────────────────────────────────────────────
+
+/**
+ * Top-level entry point for what the Viewer panel should show, given both
+ * panels' current selection and entries. Pure and synchronous — it never
+ * does I/O (no MIME detection, no owner/permission lookups, no size
+ * calculation); those are gathered separately, asynchronously, and merged
+ * into the column data the caller already has by the time this runs, OR
+ * are represented here only as a flag the caller acts on (e.g.
+ * needsSizeCalculation).
+ *
+ * Column count follows directly from how many panels have a non-empty
+ * selection — 0 → empty state, 1 → one column, 2 → two columns. Within a
+ * column, whether it's single- or multi-item content is a property of
+ * that panel's own selection size, independent of the other panel.
+ *
+ * @param {object} panels — { left: {selection, entries}, right: {selection, entries} }
+ * @returns {{ mode: 'empty' } | { mode: 'columns', columns: object[] }}
+ *   Each column: { side, kind: 'single'|'multi', ...kind-specific fields }
+ *   single:  { side, kind:'single', entry }
+ *   multi:   { side, kind:'multi', entries, counts, recentCreated, recentModified }
+ */
+function describeViewerSelection(panels) {
+  const sides = ['left', 'right'].filter(side => {
+    const p = panels[side];
+    return p && Array.isArray(p.selection) && p.selection.length > 0;
+  });
+
+  if (sides.length === 0) return { mode: 'empty' };
+
+  const columns = sides.map(side => _describeViewerColumn(side, panels[side]));
+  return { mode: 'columns', columns };
+}
+
+function _describeViewerColumn(side, panel) {
+  const selectedPaths = new Set(panel.selection);
+  const selectedEntries = (panel.entries || []).filter(e => selectedPaths.has(e.path));
+
+  if (selectedEntries.length === 1) {
+    return { side, kind: 'single', entry: selectedEntries[0] };
+  }
+
+  return {
+    side,
+    kind: 'multi',
+    entries: selectedEntries,
+    counts: _viewerCounts(selectedEntries),
+    recentCreated:  _viewerRecent(selectedEntries, 'created'),
+    recentModified: _viewerRecent(selectedEntries, 'mtime'),
+  };
+}
+
+/**
+ * @param {object[]} entries
+ * @returns {{ files: number, folders: number, total: number }}
+ */
+function _viewerCounts(entries) {
+  let files = 0, folders = 0;
+  for (const e of entries) {
+    if (e.type === 'dir') folders++;
+    else files++; // file, symlink, other all count as "files" for this summary
+  }
+  return { files, folders, total: entries.length };
+}
+
+/**
+ * Top 3 entries by the given timestamp field, newest first.
+ *
+ * @param {object[]} entries
+ * @param {'created'|'mtime'} field
+ * @returns {{ type: string, name: string, when: number }[]}
+ */
+function _viewerRecent(entries, field) {
+  return entries
+    .slice()
+    .sort((a, b) => (b[field] || 0) - (a[field] || 0))
+    .slice(0, 3)
+    .map(e => ({ type: e.type, name: e.name, when: e[field] }));
+}
+
+/**
+ * Build the "Type" row's label for a single-selection file, e.g.
+ * "text — text/html file" or "binary — .png file". Folders don't get a
+ * Type row at all (see the spec's bracketed-optional notation) — this is
+ * only ever called for files.
+ *
+ * @param {boolean}     isTextual
+ * @param {string|null} mime       — detected MIME, or null if file-type found no match
+ * @param {string}      ext        — the file's own extension (with leading dot), used
+ *                                   as the fallback label when there's no MIME match
+ * @returns {string}
+ */
+function viewerKindLabel(isTextual, mime, ext) {
+  const kind = isTextual ? 'text' : 'binary';
+  const label = mime || (ext ? ext.replace(/^\./, '').toUpperCase() : 'unknown');
+  return `${kind} \u2014 ${label} file`;
+}
+
+/**
+ * Build the 3x3 boolean permission grid for a POSIX octal mode, in the
+ * conventional [owner, group, other] x [read, write, execute] order.
+ *
+ * @param {number} mode — numeric mode, e.g. 0o644
+ * @returns {{ owner: {r,w,x}, group: {r,w,x}, other: {r,w,x} }}
+ */
+function viewerPermissionGrid(mode) {
+  const bit = (shift, flag) => !!(mode & (flag << shift));
+  return {
+    owner: { r: bit(6, 4), w: bit(6, 2), x: bit(6, 1) },
+    group: { r: bit(3, 4), w: bit(3, 2), x: bit(3, 1) },
+    other: { r: bit(0, 4), w: bit(0, 2), x: bit(0, 1) },
+  };
+}
+
 // ─── Exports (CommonJS for tests, also assigned to window for browser use) ───
 
 const uiState = {
@@ -861,6 +997,7 @@ const uiState = {
   switchTab,
   nextSortState,
   fmtSize,
+  fmtSizeVerbose,
   fmtDate,
   shortenPath,
   basenameSelectionEnd,
@@ -882,6 +1019,9 @@ const uiState = {
   copyDialogHeader,
   copyReport,
   prefixedName,
+  describeViewerSelection,
+  viewerKindLabel,
+  viewerPermissionGrid,
 };
 
 // Always expose as a browser global when running in a browser context.

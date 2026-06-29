@@ -593,6 +593,48 @@ describe('fmtSize', () => {
   test('boundary: 1024 bytes = 1.0 K', () => assert.equal(S.fmtSize(1024), '1.0 K'));
 });
 
+// ─── fmtSizeVerbose ───────────────────────────────────────────────────────────
+
+describe('fmtSizeVerbose', () => {
+  test('bytes — no unit conversion, still shows the parenthesized exact count', () => {
+    assert.equal(S.fmtSizeVerbose(512), '512 Bytes');
+  });
+
+  test('kilobytes', () => {
+    assert.equal(S.fmtSizeVerbose(2048), '2.0 Kb (2,048 Bytes)');
+  });
+
+  test('megabytes', () => {
+    assert.equal(S.fmtSizeVerbose(2 * 1024 * 1024), '2.0 Mb (2,097,152 Bytes)');
+  });
+
+  test('gigabytes', () => {
+    assert.equal(S.fmtSizeVerbose(2 * 1024 * 1024 * 1024), '2.0 Gb (2,147,483,648 Bytes)');
+  });
+
+  test('null/undefined → empty string', () => {
+    assert.equal(S.fmtSizeVerbose(null), '');
+    assert.equal(S.fmtSizeVerbose(undefined), '');
+  });
+
+  test('zero bytes', () => {
+    assert.equal(S.fmtSizeVerbose(0), '0 Bytes');
+  });
+
+  test('boundary: 1023 bytes stays in Bytes', () => {
+    assert.equal(S.fmtSizeVerbose(1023), '1023 Bytes');
+  });
+
+  test('boundary: 1024 bytes crosses into Kb', () => {
+    assert.equal(S.fmtSizeVerbose(1024), '1.0 Kb (1,024 Bytes)');
+  });
+
+  test('large byte counts get thousands separators in the exact count', () => {
+    const r = S.fmtSizeVerbose(123456789);
+    assert.match(r, /\(123,456,789 Bytes\)$/);
+  });
+});
+
 // ─── fmtDate ──────────────────────────────────────────────────────────────────
 
 describe('fmtDate', () => {
@@ -1226,5 +1268,177 @@ describe('opConfirmMessage', () => {
   });
   test('move', () => {
     assert.equal(S.opConfirmMessage('move', 2, '/dst'), 'Move 2 items to:\n/dst');
+  });
+});
+
+// ─── describeViewerSelection ──────────────────────────────────────────────────
+
+describe('describeViewerSelection', () => {
+  const fileA  = { path: '/L/a.txt', name: 'a.txt', type: 'file', size: 100, mtime: 300, created: 100 };
+  const fileB  = { path: '/L/b.txt', name: 'b.txt', type: 'file', size: 200, mtime: 100, created: 300 };
+  const dirC   = { path: '/L/c',     name: 'c',     type: 'dir',  size: 0,   mtime: 200, created: 200 };
+  const fileD  = { path: '/R/d.txt', name: 'd.txt', type: 'file', size: 50,  mtime: 50,  created: 50  };
+  const fileE  = { path: '/R/e.txt', name: 'e.txt', type: 'file', size: 60,  mtime: 60,  created: 60  };
+
+  function makePanels(leftSel, rightSel) {
+    return {
+      left:  { selection: leftSel,  entries: [fileA, fileB, dirC] },
+      right: { selection: rightSel, entries: [fileD, fileE] },
+    };
+  }
+
+  test('no selection in either panel → empty mode', () => {
+    const r = S.describeViewerSelection(makePanels([], []));
+    assert.deepEqual(r, { mode: 'empty' });
+  });
+
+  test('single item selected in one panel → one column, kind single', () => {
+    const r = S.describeViewerSelection(makePanels(['/L/a.txt'], []));
+    assert.equal(r.mode, 'columns');
+    assert.equal(r.columns.length, 1);
+    assert.equal(r.columns[0].side, 'left');
+    assert.equal(r.columns[0].kind, 'single');
+    assert.equal(r.columns[0].entry.name, 'a.txt');
+  });
+
+  test('multiple items selected in one panel → one column, kind multi', () => {
+    const r = S.describeViewerSelection(makePanels(['/L/a.txt', '/L/c'], []));
+    assert.equal(r.columns.length, 1);
+    assert.equal(r.columns[0].kind, 'multi');
+    assert.equal(r.columns[0].entries.length, 2);
+  });
+
+  test('selection in both panels → two columns, left first then right', () => {
+    const r = S.describeViewerSelection(makePanels(['/L/a.txt'], ['/R/d.txt']));
+    assert.equal(r.columns.length, 2);
+    assert.equal(r.columns[0].side, 'left');
+    assert.equal(r.columns[1].side, 'right');
+  });
+
+  test('one single column + one multi column simultaneously', () => {
+    const r = S.describeViewerSelection(makePanels(['/L/a.txt'], ['/R/d.txt', '/R/e.txt']));
+    assert.equal(r.columns[0].kind, 'single');
+    assert.equal(r.columns[1].kind, 'multi');
+  });
+
+  test('multi column reports correct file/folder/total counts', () => {
+    const r = S.describeViewerSelection(makePanels(['/L/a.txt', '/L/b.txt', '/L/c'], []));
+    assert.deepEqual(r.columns[0].counts, { files: 2, folders: 1, total: 3 });
+  });
+
+  test('multi column recentCreated is sorted newest-first, top 3', () => {
+    const r = S.describeViewerSelection(makePanels(['/L/a.txt', '/L/b.txt', '/L/c'], []));
+    const names = r.columns[0].recentCreated.map(e => e.name);
+    // created: b=300, c=200, a=100 → newest first
+    assert.deepEqual(names, ['b.txt', 'c', 'a.txt']);
+  });
+
+  test('multi column recentModified is sorted newest-first, top 3', () => {
+    const r = S.describeViewerSelection(makePanels(['/L/a.txt', '/L/b.txt', '/L/c'], []));
+    const names = r.columns[0].recentModified.map(e => e.name);
+    // mtime: a=300, c=200, b=100 → newest first
+    assert.deepEqual(names, ['a.txt', 'c', 'b.txt']);
+  });
+
+  test('recent lists cap at 3 even with more items selected', () => {
+    const manyEntries = Array.from({ length: 5 }, (_, i) => ({
+      path: `/L/f${i}.txt`, name: `f${i}.txt`, type: 'file', size: 1, mtime: i, created: i,
+    }));
+    const panels = {
+      left:  { selection: manyEntries.map(e => e.path), entries: manyEntries },
+      right: { selection: [], entries: [] },
+    };
+    const r = S.describeViewerSelection(panels);
+    assert.equal(r.columns[0].recentCreated.length, 3);
+    assert.equal(r.columns[0].recentModified.length, 3);
+  });
+
+  test('selection referencing a path no longer in entries is silently dropped', () => {
+    const r = S.describeViewerSelection(makePanels(['/L/a.txt', '/L/ghost.txt'], []));
+    // Only a.txt actually matches a live entry — single column despite 2 selected paths
+    assert.equal(r.columns[0].kind, 'single');
+    assert.equal(r.columns[0].entry.name, 'a.txt');
+  });
+
+  test('symlinks count as "files" in the multi counts summary', () => {
+    const link = { path: '/L/lnk', name: 'lnk', type: 'symlink', size: 0, mtime: 1, created: 1 };
+    const panels = {
+      left:  { selection: ['/L/a.txt', '/L/lnk'], entries: [fileA, link] },
+      right: { selection: [], entries: [] },
+    };
+    const r = S.describeViewerSelection(panels);
+    assert.deepEqual(r.columns[0].counts, { files: 2, folders: 0, total: 2 });
+  });
+});
+
+// ─── viewerKindLabel ──────────────────────────────────────────────────────────
+
+describe('viewerKindLabel', () => {
+  test('textual file with a real MIME match', () => {
+    assert.equal(S.viewerKindLabel(true, 'text/html', '.html'), 'text \u2014 text/html file');
+  });
+
+  test('binary file with a real MIME match', () => {
+    assert.equal(S.viewerKindLabel(false, 'image/png', '.png'), 'binary \u2014 image/png file');
+  });
+
+  test('binary file with no MIME match falls back to the uppercased extension', () => {
+    assert.equal(S.viewerKindLabel(false, null, '.xyz'), 'binary \u2014 XYZ file');
+  });
+
+  test('textual file with no MIME match (the common case — file-type never detects text)', () => {
+    assert.equal(S.viewerKindLabel(true, null, '.md'), 'text \u2014 MD file');
+  });
+
+  test('no extension at all and no MIME match → "unknown"', () => {
+    assert.equal(S.viewerKindLabel(true, null, ''), 'text \u2014 unknown file');
+  });
+});
+
+// ─── viewerPermissionGrid ─────────────────────────────────────────────────────
+
+describe('viewerPermissionGrid', () => {
+  test('0o644 — owner rw, group r, other r', () => {
+    const g = S.viewerPermissionGrid(0o644);
+    assert.deepEqual(g, {
+      owner: { r: true,  w: true,  x: false },
+      group: { r: true,  w: false, x: false },
+      other: { r: true,  w: false, x: false },
+    });
+  });
+
+  test('0o755 — owner rwx, group rx, other rx', () => {
+    const g = S.viewerPermissionGrid(0o755);
+    assert.deepEqual(g, {
+      owner: { r: true, w: true,  x: true },
+      group: { r: true, w: false, x: true },
+      other: { r: true, w: false, x: true },
+    });
+  });
+
+  test('0o000 — nothing set anywhere', () => {
+    const g = S.viewerPermissionGrid(0o000);
+    assert.deepEqual(g, {
+      owner: { r: false, w: false, x: false },
+      group: { r: false, w: false, x: false },
+      other: { r: false, w: false, x: false },
+    });
+  });
+
+  test('0o777 — everything set everywhere', () => {
+    const g = S.viewerPermissionGrid(0o777);
+    assert.deepEqual(g, {
+      owner: { r: true, w: true, x: true },
+      group: { r: true, w: true, x: true },
+      other: { r: true, w: true, x: true },
+    });
+  });
+
+  test('0o600 — only owner has any access', () => {
+    const g = S.viewerPermissionGrid(0o600);
+    assert.equal(g.owner.r, true);
+    assert.equal(g.owner.w, true);
+    assert.equal(g.group.r, false);
+    assert.equal(g.other.r, false);
   });
 });

@@ -60,6 +60,7 @@
     viewerDivider: $('viewer-divider'),
     viewerPanel:   $('viewer-panel'),
     viewerClose:   $('viewer-close'),
+    viewerContent: $('viewer-content'),
     fkeyBar:       $('fkey-bar'),
   };
 
@@ -273,7 +274,49 @@
     dom.panelsArea.style.flex      = `0 0 ${topPx}px`;
     dom.viewerPanel.style.flexBasis = bottomPx + 'px';
 
+    // Re-check fit now that the Viewer panel's own height may have just
+    // changed (drag, reset, or window resize all land here) — content that
+    // fit before a resize might not after, and vice versa.
+    _applyViewerFit();
+
     return availableHeight > 0 ? topPx / availableHeight : f;
+  }
+
+  /**
+   * Toggle #viewer-columns between height:100% (default, keeps vertical
+   * centering) and height:auto (lets it grow past #viewer-content's box,
+   * which then scrolls normally) based on whether the tallest column's
+   * content actually fits in the available space right now.
+   *
+   * Centering and scroll-driven overflow don't compose well in flexbox —
+   * align-items:center on an overflowing child clips it symmetrically from
+   * both edges rather than anchoring to one, which produces a scrollbar
+   * that can't actually reach the true top/bottom. Keeping the two modes
+   * mutually exclusive, decided by a real measurement rather than assumed,
+   * is what avoids that.
+   *
+   * Safe to call whenever the Viewer's available height OR its rendered
+   * content could have changed — called from _applyViewerSplit (drag,
+   * reset, window resize, panel-open) and from the end of renderViewer
+   * (selection changes, which can make content taller/shorter independent
+   * of any divider movement). No-op if the Viewer is closed or has no
+   * columns currently rendered (e.g. showing the empty-state message).
+   */
+  function _applyViewerFit() {
+    if (!appState.viewerOpen) return;
+
+    const columns = dom.viewerContent.querySelectorAll('.column-info');
+    if (columns.length === 0) return; // empty-state or not yet rendered
+
+    let tallest = 0;
+    columns.forEach(el => { tallest = Math.max(tallest, el.scrollHeight); });
+
+    const columnsEl = document.getElementById('viewer-columns');
+    if (!columnsEl) return;
+
+    const availableHeight = dom.viewerContent.clientHeight;
+    const fits = tallest <= availableHeight;
+    columnsEl.style.height = fits ? '100%' : 'auto';
   }
 
   /**
@@ -374,6 +417,7 @@
       dom.viewerDivider.style.display = 'block';
       dom.viewerPanel.style.display   = 'flex';
       _applyViewerSplit(appState.config.viewerSplit);
+      renderViewer();
     } else {
       dom.viewerDivider.style.display = 'none';
       dom.viewerPanel.style.display   = 'none';
@@ -388,6 +432,311 @@
     e.stopPropagation();
     toggleViewer(false);
   });
+
+  // ─── Viewer panel content rendering ────────────────────────────────────────
+
+  // Per-side cache of the async enrichment (kind label, owner, permissions)
+  // fetched by viewer-details.js for the current single-selection item, so
+  // a re-render (e.g. triggered by the OTHER panel's selection changing)
+  // doesn't need to re-fetch or lose what's already known. Keyed by the
+  // item's path — cleared whenever that side's selection no longer matches.
+  const _viewerDetailsCache = { left: null, right: null }; // { path, details } | null
+
+  /**
+   * Re-render the Viewer panel's content area from both panels' current
+   * selection. Safe to call unconditionally (e.g. from every selection
+   * mutation site) — it's a no-op render into a hidden panel if the Viewer
+   * is currently closed, cheap enough not to bother guarding callers with
+   * an appState.viewerOpen check themselves.
+   */
+  function renderViewer() {
+    if (!appState.viewerOpen) return;
+
+    const panels = {
+      left:  { selection: selArray('left'),  entries: appState.panels.left.entries  },
+      right: { selection: selArray('right'), entries: appState.panels.right.entries },
+    };
+    const desc = S.describeViewerSelection(panels);
+
+    dom.viewerContent.innerHTML = '';
+
+    if (desc.mode === 'empty') {
+      _viewerDetailsCache.left = null;
+      _viewerDetailsCache.right = null;
+      dom.viewerContent.classList.add('viewer-content-centered');
+      const empty = document.createElement('div');
+      empty.className = 'viewer-empty';
+      empty.textContent = 'Nothing selected in any panel. Select files or folders to see their details here.';
+      dom.viewerContent.appendChild(empty);
+      return;
+    }
+
+    dom.viewerContent.classList.remove('viewer-content-centered');
+
+    const wrap = document.createElement('div');
+    wrap.id = 'viewer-columns';
+
+    for (const col of desc.columns) {
+      wrap.appendChild(_renderViewerColumn(col));
+    }
+    dom.viewerContent.appendChild(wrap);
+
+    // Content height can change with every render independent of any
+    // divider drag (e.g. a multi-selection table is taller than a
+    // single-item one) — re-check fit now that the new content is in
+    // the live DOM and its real height can be measured.
+    _applyViewerFit();
+
+    // Drop any cached enrichment for a side that no longer has a (matching)
+    // single-selection — keeps the cache from ever showing stale details
+    // for a different item than what's now actually selected.
+    for (const side of ['left', 'right']) {
+      const col = desc.columns.find(c => c.side === side);
+      const cached = _viewerDetailsCache[side];
+      const wantsPath = (col && col.kind === 'single') ? col.entry.path : null;
+      if (!wantsPath || (cached && cached.path !== wantsPath)) {
+        _viewerDetailsCache[side] = null;
+      }
+    }
+
+    // Kick off async enrichment for any single-selection column that
+    // doesn't already have it cached. Skipped entirely while busy — see
+    // the call site for the rationale (avoids competing with whatever
+    // else might be using the single shared worker right now).
+    for (const col of desc.columns) {
+      if (col.kind !== 'single') continue;
+      if (_viewerDetailsCache[col.side] && _viewerDetailsCache[col.side].path === col.entry.path) continue;
+      _fetchViewerDetails(col.side, col.entry.path);
+    }
+  }
+
+  async function _fetchViewerDetails(side, targetPath) {
+    if (appState.busy) return; // see renderViewer()'s comment — skip, not queue
+
+    adapter.assign('worker/tasks/viewer-details.js', { path: targetPath }).catch(err => {
+      if (appState._viewerDetailsResolve) {
+        const resolve = appState._viewerDetailsResolve;
+        appState = { ...appState, _viewerDetailsResolve: null };
+        resolve({ ok: false, error: err.message });
+      }
+    });
+
+    const outcome = await new Promise(resolve => {
+      appState = { ...appState, _viewerDetailsResolve: resolve };
+    });
+
+    if (!outcome.ok) return; // silently skip enrichment on failure, per design
+
+    // Only apply if this is still the item that's actually selected on this
+    // side — selection may have moved on during the round-trip.
+    const sel = selArray(side);
+    if (sel.length !== 1 || sel[0] !== targetPath) return;
+
+    _viewerDetailsCache[side] = { path: targetPath, details: outcome.result };
+    renderViewer();
+  }
+
+  function _renderViewerColumn(col) {
+    const column = document.createElement('div');
+    column.className = 'viewer-column';
+
+    const info = document.createElement('div');
+    info.className = 'column-info';
+
+    const location = document.createElement('div');
+    location.className = 'viewer-column-location';
+    location.textContent = `${col.side === 'left' ? 'Left' : 'Right'} panel`;
+    info.appendChild(location);
+
+    if (col.kind === 'single') {
+      info.appendChild(_renderViewerSingle(col));
+    } else {
+      info.appendChild(_renderViewerMulti(col));
+    }
+
+    column.appendChild(info);
+    return column;
+  }
+
+  function _kv(label, value, rowClass) {
+    const tr = document.createElement('tr');
+    if (rowClass) tr.className = rowClass;
+    const th = document.createElement('th');
+    th.textContent = label;
+    const td = document.createElement('td');
+    if (value instanceof Node) td.appendChild(value);
+    else td.textContent = value;
+    tr.appendChild(th);
+    tr.appendChild(td);
+    return tr;
+  }
+
+  function _renderViewerSingle(col) {
+    const frag = document.createDocumentFragment();
+    const e = col.entry;
+    const cached = _viewerDetailsCache[col.side];
+    const details = (cached && cached.path === e.path) ? cached.details : null;
+
+    const table = document.createElement('table');
+    table.className = 'viewer-table';
+    const tbody = document.createElement('tbody');
+
+    tbody.appendChild(_kv('Type', e.type === 'dir' ? 'Folder' : 'File'));
+    tbody.appendChild(_kv('Name', e.name));
+
+    if (e.type === 'file') {
+      tbody.appendChild(_kv('Kind', details ? details.kindLabel : '\u2026'));
+    }
+
+    tbody.appendChild(_kv('Created on', S.fmtDate(e.created)));
+    tbody.appendChild(_kv('Last modified on', S.fmtDate(e.mtime)));
+
+    if (details && details.owner) {
+      tbody.appendChild(_kv('Owner', details.owner));
+    }
+
+    if (details) {
+      const permLabel = process_platform_is_windows()
+        ? 'Attributes'
+        : 'Permissions';
+      tbody.appendChild(_kv(permLabel, _renderViewerPermissions(details)));
+    }
+
+    // Size row: files show their known size directly (no calculation
+    // needed); folders get a Calculate button shell (wiring lands in the
+    // size-calculation pass). Only the button case needs vertical centering
+    // — the button is taller than the label text, which otherwise looks
+    // top-aligned/unbalanced next to it.
+    if (e.type === 'dir') {
+      tbody.appendChild(_kv('Size', _renderViewerSizeRow(col.side, [e.path]), 'viewer-size-kv'));
+    } else {
+      tbody.appendChild(_kv('Size', S.fmtSize(e.size)));
+    }
+
+    table.appendChild(tbody);
+    frag.appendChild(table);
+    return frag;
+  }
+
+  function _renderViewerPermissions(details) {
+    if (process_platform_is_windows()) {
+      const span = document.createElement('span');
+      const bits = [];
+      if (details.isReadOnly)   bits.push('Read-only');
+      if (details.isExecutable) bits.push('Executable');
+      span.textContent = bits.length ? bits.join(', ') : '\u2014';
+      return span;
+    }
+
+    const grid = details.permissionGrid;
+    const wrap = document.createElement('div');
+    wrap.className = 'viewer-perm-grid';
+
+    const corner = document.createElement('span');
+    wrap.appendChild(corner);
+    ['Read', 'Write', 'Execute'].forEach(h => {
+      const head = document.createElement('span');
+      head.className = 'viewer-perm-head';
+      head.textContent = h;
+      wrap.appendChild(head);
+    });
+
+    [['owner', 'Owner'], ['group', 'Group'], ['other', 'Other']].forEach(([key, label]) => {
+      const rowLabel = document.createElement('span');
+      rowLabel.className = 'viewer-perm-row-label';
+      rowLabel.textContent = label;
+      wrap.appendChild(rowLabel);
+      ['r', 'w', 'x'].forEach(flag => {
+        const cell = document.createElement('span');
+        const isSet = grid && grid[key] && grid[key][flag];
+        cell.className = 'viewer-perm-cell' + (isSet ? ' is-set' : '');
+        cell.textContent = isSet ? '\u2713' : '\u2014';
+        wrap.appendChild(cell);
+      });
+    });
+
+    return wrap;
+  }
+
+  function _renderViewerMulti(col) {
+    const frag = document.createDocumentFragment();
+
+    const countsTable = document.createElement('table');
+    countsTable.className = 'viewer-table';
+    const countsBody = document.createElement('tbody');
+    countsBody.appendChild(_kv('Files', String(col.counts.files)));
+    countsBody.appendChild(_kv('Folders', String(col.counts.folders)));
+    countsBody.appendChild(_kv('Total', String(col.counts.total)));
+    countsTable.appendChild(countsBody);
+    frag.appendChild(countsTable);
+
+    frag.appendChild(_renderViewerRecentTable('Recent additions', 'Creation date', col.recentCreated));
+    frag.appendChild(_renderViewerRecentTable('Recent changes', 'Modification date', col.recentModified));
+
+    const sizeTitle = document.createElement('div');
+    sizeTitle.className = 'viewer-subtable-title';
+    sizeTitle.textContent = 'Total Size';
+    frag.appendChild(sizeTitle);
+    frag.appendChild(_renderViewerSizeRow(col.side, col.entries.map(e => e.path)));
+
+    return frag;
+  }
+
+  function _renderViewerRecentTable(title, dateLabel, rows) {
+    const frag = document.createDocumentFragment();
+    const heading = document.createElement('div');
+    heading.className = 'viewer-subtable-title';
+    heading.textContent = title;
+    frag.appendChild(heading);
+
+    const table = document.createElement('table');
+    table.className = 'viewer-table';
+    const tbody = document.createElement('tbody');
+
+    if (rows.length === 0) {
+      tbody.appendChild(_kv('\u2014', 'No items'));
+    } else {
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        const thType = document.createElement('th');
+        thType.textContent = r.type === 'dir' ? 'Folder' : 'File';
+        const td = document.createElement('td');
+        td.textContent = `${r.name} \u2014 ${S.fmtDate(r.when)}`;
+        tr.appendChild(thType);
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      });
+    }
+
+    table.appendChild(tbody);
+    frag.appendChild(table);
+    return frag;
+  }
+
+  /**
+   * Size row shell — Calculate button + result/spinner slot. The actual
+   * calc-size.js task wiring (spawn, cancel-on-selection-change, WS result
+   * notification) lands in a later pass; for now this renders the static
+   * shell so the layout is in place and confirmed before that work starts.
+   */
+  function _renderViewerSizeRow(side, paths) {
+    const row = document.createElement('div');
+    row.className = 'viewer-size-row';
+    const btn = document.createElement('button');
+    btn.className = 'viewer-calc-btn';
+    btn.textContent = 'Calculate';
+    btn.disabled = true; // enabled once calc-size.js wiring lands
+    btn.title = 'Coming soon';
+    row.appendChild(btn);
+    return row;
+  }
+
+  // The browser doesn't expose process.platform directly — appState.platform
+  // (set from the worker's own navigate results, see makeAppState's comment)
+  // is the one source of truth for this already used elsewhere in this file.
+  function process_platform_is_windows() {
+    return appState.platform === 'win32';
+  }
 
   // ─── Navigate ─────────────────────────────────────────────────────────────────
 
@@ -471,7 +820,7 @@
           renderPanel(payload.panel);
         }
       }
-      if (payloads.length > 0) renderFkeys();
+      if (payloads.length > 0) { renderFkeys(); renderViewer(); }
 
       // Surface per-item errors from move / delete (copy uses its own dialog)
       if (result.errors && result.errors.length > 0 && !result.stats) {
@@ -510,6 +859,15 @@
       if (appState._openWithResolve) {
         const resolve = appState._openWithResolve;
         appState = { ...appState, _openWithResolve: null };
+        resolve({ ok: true, result });
+      }
+
+      // F3 Viewer panel — async detail enrichment (kind label, owner,
+      // permissions) for a single-selection column. Same forward-the-
+      // result-as-is shape as F4's, since the caller needs the payload.
+      if (appState._viewerDetailsResolve) {
+        const resolve = appState._viewerDetailsResolve;
+        appState = { ...appState, _viewerDetailsResolve: null };
         resolve({ ok: true, result });
       }
 
@@ -561,6 +919,10 @@
           } else if (appState._openWithResolve) {
             const resolve = appState._openWithResolve;
             appState = { ...appState, _openWithResolve: null };
+            resolve({ ok: false, error: errMsg || 'Unknown error' });
+          } else if (appState._viewerDetailsResolve) {
+            const resolve = appState._viewerDetailsResolve;
+            appState = { ...appState, _viewerDetailsResolve: null };
             resolve({ ok: false, error: errMsg || 'Unknown error' });
           } else {
             showError('Error', errMsg || 'Unknown error');
@@ -789,6 +1151,7 @@
         }
         renderList(side, appState.panels[side]);
         renderFkeys();
+        renderViewer();
       });
 
       row.addEventListener('dblclick', () => {
@@ -1794,6 +2157,7 @@
         selSets[side] = new Set(S.selectAllPaths(appState.panels[side].entries));
         renderList(side, appState.panels[side]);
         renderFkeys();
+        renderViewer();
       }
     }
   });

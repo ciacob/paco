@@ -1927,6 +1927,106 @@ describe('open-with task', () => {
   });
 });
 
+// ─── viewer-details task (F3) ─────────────────────────────────────────────────
+
+describe('viewer-details task', () => {
+  test('fails when no path is given', async () => {
+    purgeCache('worker/tasks/viewer-details');
+    const task = require('../worker/tasks/viewer-details');
+    const { ctx, promise } = makeCtx({ path: '' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no item specified/i);
+  });
+
+  test('fails when the target no longer exists', async () => {
+    purgeCache('worker/tasks/viewer-details');
+    const task = require('../worker/tasks/viewer-details');
+    const { ctx, promise } = makeCtx({ path: path.join(workDir, 'ghost-viewer.txt') });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no longer exists/i);
+  });
+
+  test('returns a kindLabel for a text file', async () => {
+    const target = path.join(workDir, 'notes.md');
+    await mkfile(target, '# hello\n\nsome markdown content');
+    purgeCache('worker/tasks/viewer-details');
+    purgeCache('paco/ui-state');
+    purgeCache('paco/file-handler-detect');
+    const task = require('../worker/tasks/viewer-details');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok, result && result.error);
+    assert.match(result.kindLabel, /^text \u2014 /);
+  });
+
+  test('returns a kindLabel for a real binary signature (PNG)', async () => {
+    const target = path.join(workDir, 'pic.png');
+    const pngSig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await fsp.writeFile(target, Buffer.concat([pngSig, Buffer.alloc(20)]));
+    purgeCache('worker/tasks/viewer-details');
+    purgeCache('paco/ui-state');
+    purgeCache('paco/file-handler-detect');
+    const task = require('../worker/tasks/viewer-details');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.kindLabel, 'binary \u2014 image/png file');
+  });
+
+  test('kindLabel is null for a folder (no Type row in that case)', async () => {
+    const target = path.join(workDir, 'a-folder');
+    await fsp.mkdir(target);
+    purgeCache('worker/tasks/viewer-details');
+    purgeCache('paco/ui-state');
+    purgeCache('paco/file-handler-detect');
+    const task = require('../worker/tasks/viewer-details');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.kindLabel, null);
+  });
+
+  test('includes owner and octal permissions on POSIX',
+    { skip: process.platform === 'win32' }, async () => {
+      const target = path.join(workDir, 'perms.txt');
+      await mkfile(target, 'x');
+      await fsp.chmod(target, 0o644);
+      purgeCache('worker/tasks/viewer-details');
+      purgeCache('paco/ui-state');
+      purgeCache('paco/file-handler-detect');
+      const task = require('../worker/tasks/viewer-details');
+      const { ctx, promise } = makeCtx({ path: target });
+      task.start(ctx);
+      const { ok, result } = await promise;
+      assert.ok(ok);
+      assert.equal(result.octal, '644');
+      assert.equal(typeof result.owner, 'string');
+      assert.ok(result.permissionGrid);
+      assert.deepEqual(result.permissionGrid.owner, { r: true, w: true, x: false });
+    });
+
+  test('reports progress through the operation', async () => {
+    const target = path.join(workDir, 'progress-viewer.txt');
+    await mkfile(target, 'x');
+    purgeCache('worker/tasks/viewer-details');
+    purgeCache('paco/ui-state');
+    purgeCache('paco/file-handler-detect');
+    const task = require('../worker/tasks/viewer-details');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { progressLog } = await promise;
+    assert.ok(progressLog.length >= 2);
+    assert.equal(progressLog[progressLog.length - 1].pct, 100);
+  });
+});
+
 // ─── navigate task ────────────────────────────────────────────────────────────
 
 describe('navigate task', () => {

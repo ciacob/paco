@@ -27,6 +27,7 @@ const os    = require('os');
  * @property {'dir'|'file'|'symlink'|'other'} type
  * @property {number}  size        — bytes (0 for dirs)
  * @property {number}  mtime       — ms since epoch
+ * @property {number}  created     — ms since epoch (birthtime)
  * @property {boolean} hidden      — dot-file on unix, or Windows hidden attr
  * @property {boolean} readable
  * @property {boolean} writable
@@ -114,6 +115,7 @@ async function _stat(fullPath, name) {
       type,
       size,
       mtime:      lstat.mtimeMs,
+      created:    lstat.birthtimeMs,
       hidden,
       readable,
       writable,
@@ -124,17 +126,118 @@ async function _stat(fullPath, name) {
   }
 }
 
-async function _isWindowsHidden(fullPath) {
-  if (process.platform !== 'win32') return false;
+/**
+ * Richer, single-item stat used only by the Viewer panel's single-selection
+ * table — NOT called during normal directory listing, since resolving an
+ * owner name and reading Windows attributes is comparatively expensive and
+ * only ever needed for the one item currently selected, not for every row
+ * in a potentially large directory.
+ *
+ * @param {string} fullPath
+ * @returns {Promise<object|null>} null if the path can't be stated.
+ *   On POSIX: { owner: string|null, mode: number, octal: string }
+ *   On Windows: { isReadOnly: boolean, isExecutable: boolean }
+ *   (owner/mode/octal are always present but null/0 on Windows where they
+ *   carry no meaningful information; isReadOnly/isExecutable are always
+ *   present but isReadOnly is meaningless on POSIX, which has the real
+ *   octal permissions to show instead.)
+ */
+async function statDetails(fullPath) {
   try {
-    // On Windows, use attrib command to check hidden flag
+    const lstat = await fsp.lstat(fullPath);
+    const mode  = lstat.mode & 0o777;
+    const octal = mode.toString(8).padStart(3, '0');
+
+    let owner = null;
+    if (process.platform !== 'win32') {
+      owner = await _resolveOwnerName(lstat.uid);
+    }
+
+    let isReadOnly = false;
+    if (process.platform === 'win32') {
+      const flags = await _windowsAttribFlags(fullPath);
+      isReadOnly = flags.readOnly;
+    }
+
+    const isExecutable = await _detectExecutable(fullPath);
+
+    return { owner, mode, octal, isReadOnly, isExecutable };
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Resolve a POSIX uid to a username via the `id` command — Node has no
+ * built-in getpwuid equivalent (a known, longstanding gap; see
+ * nodejs/node#24488 and #37517). Falls back to the raw numeric uid as a
+ * string if resolution fails (unknown uid, command unavailable, etc.).
+ *
+ * @param {number} uid
+ * @returns {Promise<string>}
+ */
+async function _resolveOwnerName(uid) {
+  try {
+    const { execFile } = require('child_process');
+    const { promisify } = require('util');
+    const execFileAsync = promisify(execFile);
+    const { stdout } = await execFileAsync('id', ['-un', String(uid)]);
+    return stdout.trim() || String(uid);
+  } catch (_) {
+    return String(uid);
+  }
+}
+
+/**
+ * Executable check, reusing the exact same logic the F4 file-handlers
+ * cascade already uses for its executable safety gate — see
+ * paco/file-handler-detect.js#detectIsExecutable for the full rationale
+ * (POSIX: real X_OK permission bit; Windows: PATHEXT extension match).
+ *
+ * @param {string} fullPath
+ * @returns {Promise<boolean>}
+ */
+async function _detectExecutable(fullPath) {
+  try {
+    const detect = require('./file-handler-detect');
+    return await detect.detectIsExecutable(fullPath);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function _isWindowsHidden(fullPath) {
+  const flags = await _windowsAttribFlags(fullPath);
+  return flags.hidden;
+}
+
+/**
+ * Read Windows file attributes (hidden, read-only) via the `attrib`
+ * command in a single call — used both by _isWindowsHidden (per-row, list
+ * context) and by statDetails (single-item, Viewer context) so the
+ * attrib-output parsing logic lives in exactly one place.
+ *
+ * @param {string} fullPath
+ * @returns {Promise<{hidden: boolean, readOnly: boolean}>}
+ */
+async function _windowsAttribFlags(fullPath) {
+  if (process.platform !== 'win32') return { hidden: false, readOnly: false };
+  try {
     const { execFile } = require('child_process');
     const { promisify } = require('util');
     const execFileAsync = promisify(execFile);
     const { stdout } = await execFileAsync('attrib', [fullPath]);
-    return stdout[0] === 'H' || stdout[1] === 'H';
+    // attrib's output is fixed-width attribute letters (A/R/H/S/...) in the
+    // first ~8 columns, followed by the path — checking the first couple
+    // of characters for each flag matches the existing _isWindowsHidden
+    // behaviour exactly, just extended to also check for 'R' (read-only).
+    const prefix = stdout.slice(0, 8);
+    return {
+      hidden:   prefix.includes('H'),
+      readOnly: prefix.includes('R'),
+    };
   } catch (_) {
-    return false;
+    return { hidden: false, readOnly: false };
   }
 }
 
@@ -355,6 +458,7 @@ function breadcrumbs(dirPath) {
 module.exports = {
   list,
   stat,
+  statDetails,
   parentDir,
   listVolumes,
   copy,
