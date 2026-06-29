@@ -449,11 +449,13 @@
        otherwise looks unbalanced next to a button. */
     .viewer-size-kv th,
     .viewer-size-kv td {
-      vertical-align: middle;
+      vertical-align: baseline;
     }
     /* Estimated Size row — Calculate button/spinner/result plus the
-       disclaimer line beneath it, both vertically centered against the
-       "Estimated Size" label as one combined block. */
+       disclaimer line beneath it. baseline (not middle) keeps the label
+       aligned to the first line (the button/spinner/result) the way it
+       was before the disclaimer was added, rather than drifting it down
+       to the middle of the now-two-line block. */
     .viewer-size-row {
       display: flex;
       flex-direction: column;
