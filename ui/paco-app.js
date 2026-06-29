@@ -735,7 +735,7 @@
 
     const location = document.createElement('div');
     location.className = 'viewer-column-location';
-    location.textContent = `${col.side === 'left' ? 'Left' : 'Right'} panel`;
+    location.textContent = `${col.side === 'left' ? 'Left' : 'Right'} panel selection`;
     info.appendChild(location);
 
     if (col.kind === 'single') {
@@ -793,12 +793,16 @@
     }
 
     // Size row: files show their known size directly (no calculation
-    // needed); folders get a Calculate button shell (wiring lands in the
-    // size-calculation pass). Only the button case needs vertical centering
-    // — the button is taller than the label text, which otherwise looks
-    // top-aligned/unbalanced next to it.
+    // needed, and it's exact — stays "Size"). Folders get a Calculate
+    // button/spinner/result — labelled "Estimated Size" since the
+    // calculation deliberately ignores symlinks and unreadable items (see
+    // the disclaimer rendered alongside it), so it's a floor, not a
+    // guaranteed exact match to what e.g. Finder/Explorer would report.
+    // Only the button case needs vertical centering — the button is
+    // taller than the label text, which otherwise looks top-aligned/
+    // unbalanced next to it.
     if (e.type === 'dir') {
-      tbody.appendChild(_kv('Size', _renderViewerSizeRow(col.side, [e.path]), 'viewer-size-kv'));
+      tbody.appendChild(_kv('Estimated Size', _renderViewerSizeRow(col.side, [e.path]), 'viewer-size-kv'));
     } else {
       tbody.appendChild(_kv('Size', S.fmtSize(e.size)));
     }
@@ -865,7 +869,7 @@
 
     const sizeTitle = document.createElement('div');
     sizeTitle.className = 'viewer-subtable-title';
-    sizeTitle.textContent = 'Total Size';
+    sizeTitle.textContent = 'Estimated Size';
     frag.appendChild(sizeTitle);
     frag.appendChild(_renderViewerSizeRow(col.side, col.entries.map(e => e.path)));
 
@@ -916,6 +920,9 @@
     const row = document.createElement('div');
     row.className = 'viewer-size-row';
 
+    const top = document.createElement('div');
+    top.className = 'viewer-size-row-top';
+
     const state = _calcState[side];
     const signature = _calcSignature(paths);
     const isCurrent = state && state.signature === signature;
@@ -924,32 +931,47 @@
       const spinner = document.createElement('span');
       spinner.className = 'viewer-calc-spinner';
       spinner.title = 'Calculating\u2026';
-      row.appendChild(spinner);
-      return row;
-    }
-
-    if (isCurrent && state.status === 'done') {
+      top.appendChild(spinner);
+    } else if (isCurrent && state.status === 'done') {
       const result = document.createElement('span');
       result.className = 'viewer-calc-result';
       result.textContent = S.fmtSizeVerbose(state.bytes);
-      row.appendChild(result);
-      return row;
-    }
-
-    if (isCurrent && state.status === 'error') {
+      top.appendChild(result);
+    } else if (isCurrent && state.status === 'error') {
       const err = document.createElement('span');
       err.className = 'viewer-calc-error';
       err.textContent = 'Could not calculate \u2014 see logs';
-      row.appendChild(err);
-      return row;
+      top.appendChild(err);
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'viewer-calc-btn';
+      btn.textContent = 'Calculate';
+      btn.addEventListener('click', () => _startCalc(side, paths));
+      top.appendChild(btn);
     }
 
-    const btn = document.createElement('button');
-    btn.className = 'viewer-calc-btn';
-    btn.textContent = 'Calculate';
-    btn.addEventListener('click', () => _startCalc(side, paths));
-    row.appendChild(btn);
+    row.appendChild(top);
+    row.appendChild(_renderViewerSizeDisclaimer());
     return row;
+  }
+
+  /**
+   * Muted disclaimer shown under every Estimated Size row — the
+   * calculation deliberately ignores symlinks and unreadable items (see
+   * worker/calc-size-child.js), so it's a floor, not a guaranteed exact
+   * match to what e.g. Finder/Explorer would report for the same folder.
+   */
+  function _renderViewerSizeDisclaimer() {
+    const line = document.createElement('div');
+    line.className = 'viewer-size-disclaimer';
+    const icon = document.createElement('span');
+    icon.className = 'viewer-size-disclaimer-icon';
+    icon.textContent = '\u2139';
+    const text = document.createElement('span');
+    text.textContent = 'Logical size \u2014 ignores symlinks and unreadable items.';
+    line.appendChild(icon);
+    line.appendChild(text);
+    return line;
   }
 
   // The browser doesn't expose process.platform directly — appState.platform

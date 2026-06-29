@@ -451,14 +451,28 @@
     .viewer-size-kv td {
       vertical-align: middle;
     }
-    /* Size row — value next to a Calculate button (folders / multi-select)
-       or just the plain formatted size (single file). Real calculation
-       wiring lands in a later pass; for now this renders the button shell
-       only. */
+    /* Estimated Size row — Calculate button/spinner/result plus the
+       disclaimer line beneath it, both vertically centered against the
+       "Estimated Size" label as one combined block. */
     .viewer-size-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .viewer-size-row-top {
       display: flex;
       align-items: center;
       gap: 8px;
+    }
+    .viewer-size-disclaimer {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      color: var(--text3);
+    }
+    .viewer-size-disclaimer .viewer-size-disclaimer-icon {
+      flex-shrink: 0;
     }
     .viewer-calc-btn {
       font-size: 11px;
