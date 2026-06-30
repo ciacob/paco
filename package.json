@@ -62,5 +62,9 @@
     "trash": "^10.1.1",
     "ws": "^8.20.0",
     "yargs": "^18.0.0"
+  },
+  "devDependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1"
   }
 }
