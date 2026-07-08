@@ -1,0 +1,16 @@
+{
+  "name": "generic-extractor",
+  "version": "1.0.0",
+  "description": "Turns arbitrary bytes into safe, ready-to-use HTML for files outside every other extractor's coverage: plain text/source code (monospaced, indent-preserving wrap) or a hex + Latin-1 dump for anything else. Exactly two <pre> elements ever, regardless of file size. Optional Find/Find-Next/Find-Prev and hex<->text cross-highlighting via a small embedded script that only ever touches bytes already sitting in the DOM as inert text. Zero runtime dependencies.",
+  "main": "src/genericExtractor.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": ["text", "hex", "hexdump", "preview", "monospace"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {},
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

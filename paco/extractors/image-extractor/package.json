@@ -1,0 +1,16 @@
+{
+  "name": "image-extractor",
+  "version": "1.0.0",
+  "description": "Turns image bytes of an asserted format (jpeg/png/webp/avif/tiff/gif/svg/heic/heif/psd) into a single-format (WebP, or JPEG for the PSD embedded-thumbnail path) thumbnail bounded to a fixed box. No filesystem access, no format sniffing, no PSD compositing. { thumbnail, format, width, height, error } out, never throws.",
+  "main": "src/imageExtractor.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": ["thumbnail", "image", "sharp", "heic", "psd", "svg"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "sharp": "^0.35.3",
+    "libheif-js": "^1.19.8"
+  }
+}
