@@ -1,5 +1,14 @@
 # generic-extractor
 
+> **Status:** design notes, implementation, and tests for one of PACO's
+> F3-viewer extractors (paired with a sandboxed-iframe architecture doc
+> discussed alongside these, not yet checked into this repo). Not yet
+> wired into `worker/tasks` — this folder is documentation-in-place
+> pending that integration. It has no `package.json`/`node_modules` of
+> its own: its one dependency (`jsdom`, dev-only) is declared in PACO's
+> root `package.json` and resolves from the root `node_modules`, same
+> as every other module in this project.
+
 Turns arbitrary bytes into safe, ready-to-use HTML for files outside
 every other extractor's coverage: bare text files, source code, and
 binary files with no dedicated handler. **Zero runtime dependencies.**

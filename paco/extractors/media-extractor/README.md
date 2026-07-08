@@ -1,5 +1,15 @@
 # media-extractor
 
+> **Status:** design notes, implementation, and tests for one of PACO's
+> F3-viewer extractors (paired with a sandboxed-iframe architecture doc
+> discussed alongside these, not yet checked into this repo). Not yet
+> wired into `worker/tasks` — this folder is documentation-in-place
+> pending that integration. It has no `package.json`/`node_modules` of
+> its own: `ffmpeg-static`, `ffprobe-static`, and `sharp` are declared
+> in PACO's root `package.json` and resolve from the root
+> `node_modules` — `sharp` in particular is shared with, and
+> deduplicated against, `image-extractor`'s own use of it.
+
 Turns video/audio bytes of an asserted format into a small, bounded set
 of **static preview images** — never full playback. No filesystem
 access beyond a scoped temp directory that's always cleaned up, no
@@ -189,15 +199,21 @@ paths explicitly if needed.
 release-assets URL at `npm install` time. In whatever sandbox this
 module was developed and tested in, that specific download domain
 wasn't reachable, so `ffmpeg-static`/`ffprobe-static` are declared as
-real dependencies here (accurate for actual deployments, where that
-download works normally) but were installed with `--ignore-scripts` to
-skip the blocked download, and the test suite instead injects a
-system-installed `ffmpeg`/`ffprobe` via the `deps.ffmpegPath`/
-`deps.ffprobePath` override — the same dependency-injection mechanism
-`getMediaPreview` exposes for any caller. This is purely a
-sandbox-testing convenience; it doesn't affect how the module behaves
-for a real caller with a working `ffmpeg-static` install, which is the
-default when no `deps.ffmpegPath`/`deps.ffprobePath` override is given.
+real dependencies in PACO's root `package.json` (accurate for actual
+deployments, where that download works normally) but were installed
+with `--ignore-scripts` to skip the blocked download, and the test
+suite instead injects a system-installed `ffmpeg`/`ffprobe` via the
+`deps.ffmpegPath`/`deps.ffprobePath` override — the same
+dependency-injection mechanism `getMediaPreview` exposes for any
+caller. `test/fixtures.js` reads the path for each from the
+`MEDIA_EXTRACTOR_TEST_FFMPEG`/`MEDIA_EXTRACTOR_TEST_FFPROBE`
+environment variables, falling back to `/usr/bin/ffmpeg`/
+`/usr/bin/ffprobe` if unset — set those two to point at a differently
+located install (e.g. Homebrew's `/opt/homebrew/bin/ffmpeg`) without
+touching any file. This is purely a test-running convenience; it
+doesn't affect how the module behaves for a real caller with a working
+`ffmpeg-static` install, which is the default when no
+`deps.ffmpegPath`/`deps.ffprobePath` override is given.
 
 ## Testing
 

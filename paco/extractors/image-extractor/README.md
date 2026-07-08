@@ -1,5 +1,16 @@
 # image-extractor
 
+> **Status:** design notes, implementation, and tests for one of PACO's
+> F3-viewer extractors (paired with a sandboxed-iframe architecture doc
+> discussed alongside these, not yet checked into this repo). Not yet
+> wired into `worker/tasks` — this folder is documentation-in-place
+> pending that integration. It has no `package.json`/`node_modules` of
+> its own: `sharp` and `libheif-js` are declared in PACO's root
+> `package.json` and resolve from the root `node_modules`, same as
+> every other module in this project — `sharp` in particular is
+> shared with, and deduplicated against, `media-extractor`'s own use
+> of it.
+
 Turns image bytes of an asserted format into a single-format thumbnail
 bounded to a fixed box (default 1024x1024, aspect preserved, never
 cropped, never upscaled). No filesystem access, no format sniffing —
