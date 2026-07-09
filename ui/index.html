@@ -356,20 +356,33 @@
       gap: 16px;
       height: 100%;
     }
+    /* flex-direction:column stacks its two children — .column-info (the
+       Details table) and .viewer-extraction (the "View as" tabs+iframe) —
+       vertically. justify-content:center centers that PAIR together as
+       one combined block along the vertical axis when they fit (same
+       centering behavior as before, just now applied to two adjacent
+       children instead of one — stacking two children under
+       justify-content:center doesn't change what centers, only what's
+       being centered). align-items:center is the default CROSS-axis
+       (horizontal) behavior for children that don't override it — see
+       .column-info and .viewer-extraction's own comments for why each of
+       them deliberately does, or doesn't. */
     .viewer-column {
       flex: 1 1 0;
       min-width: 0;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
     }
-    /* Wraps everything actually rendered inside a column (location header,
-       tables, etc.) so .viewer-column's flex-centering centers the whole
-       block as a unit, rather than each row stretching to the column's
-       full width (which would leave the table hugging the left edge with
-       empty space to its right — exactly the imbalance this fixes). Deliber-
-       ately NOT width:100% — it needs to size to its own content so there's
-       actually room on either side for the parent to center it within. */
+    /* Deliberately NOT width:100% / align-self:stretch — sizes to its own
+       content (the Details table's natural, usually-compact width) so
+       .viewer-column's align-items:center actually has room on either
+       side to center it as a unit, rather than the table hugging the
+       left edge of a full-width box with empty space to its right.
+       Unaffected by .viewer-extraction being a SEPARATE sibling below it
+       (not nested inside it) — see that rule's own comment for why they
+       needed to be split apart. */
     .column-info {
       max-width: 100%;
     }
@@ -503,10 +516,22 @@
       color: var(--err-color);
     }
 
-    /* F3 Viewer "View as:" tab row + sandboxed iframe */
+    /* F3 Viewer "View as:" tab row + sandboxed iframe.
+       A SEPARATE sibling of .column-info (not nested inside it) precisely
+       so it can claim the column's full width independent of how narrow
+       .column-info's own shrink-to-fit content happens to be — nested
+       inside it, "width:100%" here would have resolved against THAT
+       narrow width instead of the column's actual available space, which
+       is exactly why the iframe used to render far narrower than the
+       column actually allowed. align-self:stretch overrides .viewer-
+       column's default align-items:center (which .column-info still
+       relies on, deliberately, for its own centering) — an override on
+       the CROSS axis only, so it has no effect on the vertical centering
+       justify-content:center still provides for the pair as a whole. */
     .viewer-extraction {
       margin-top: 4px;
       width: 100%;
+      align-self: stretch;
     }
     .viewer-extraction-tabs {
       display: flex;

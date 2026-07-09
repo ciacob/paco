@@ -1002,10 +1002,12 @@
     // table (via _renderViewerColumn/_renderViewerSingle, which no longer
     // build the "View as" extraction block themselves — see below).
     const infoElsBySide = {};
+    const columnElsBySide = {};
     for (const col of desc.columns) {
       const { columnEl, infoEl } = _renderViewerColumn(col);
       wrap.appendChild(columnEl);
       infoElsBySide[col.side] = infoEl;
+      columnElsBySide[col.side] = columnEl;
     }
     dom.viewerContent.appendChild(wrap);
     // Details tables are now genuinely attached to the live document —
@@ -1023,13 +1025,25 @@
     // sync with a separately-hardcoded value or falling back to the
     // browser's own theme-unaware defaults (the original dark-on-dark
     // text bug).
+    //
+    // Appended to columnElsBySide (the column itself) rather than
+    // infoElsBySide (.column-info) deliberately — .column-info shrinks to
+    // fit its own content (so the compact Details table centers nicely
+    // as its own unit), and the extraction block used to be nested
+    // inside it, meaning its own "width:100%" resolved against that
+    // narrow shrink-fit width instead of the column's real available
+    // space — exactly why the iframe used to render far narrower than
+    // the column actually allowed. As a sibling of .column-info instead,
+    // it can independently stretch to the column's full width (see
+    // .viewer-extraction's own CSS/comment) with no effect on the
+    // Details table's existing compact/centered look.
     for (const col of desc.columns) {
       if (col.kind !== 'single' || col.entry.type !== 'file') continue;
       const cachedDetails = _viewerDetailsCache[col.side];
       const details = (cachedDetails && cachedDetails.path === col.entry.path) ? cachedDetails.details : null;
       if (!details) continue;
       const textStyle = _sampleDetailsTextStyle(infoElsBySide[col.side]);
-      infoElsBySide[col.side].appendChild(_renderViewerExtraction(col.side, col.entry, details, textStyle));
+      columnElsBySide[col.side].appendChild(_renderViewerExtraction(col.side, col.entry, details, textStyle));
     }
 
     // Content height can change with every render independent of any
