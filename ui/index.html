@@ -357,13 +357,19 @@
       height: 100%;
     }
     /* flex-direction:column stacks its two children — .column-info (the
-       Details table) and .viewer-extraction (the "View as" tabs+iframe) —
-       vertically. justify-content:center centers that PAIR together as
-       one combined block along the vertical axis when they fit (same
-       centering behavior as before, just now applied to two adjacent
-       children instead of one — stacking two children under
-       justify-content:center doesn't change what centers, only what's
-       being centered). align-items:center is the default CROSS-axis
+       Details table) and .viewer-extraction (the "View as" tabs+iframe,
+       when present) — vertically, top-aligned (justify-content:
+       flex-start) rather than centered. Deliberately NOT centered: the
+       two side-by-side columns can legitimately need very different
+       heights — a single-selection column's iframe grows to fill
+       whatever space is available (see .viewer-extraction's own
+       flex-grow), while a multi-selection column's counts table doesn't
+       grow at all — so centering one column's content against a span
+       whose height is actually dictated by the OTHER column produces a
+       short table floating in the middle of a tall empty area, for
+       reasons that have nothing to do with that column's own content.
+       Top-aligning both avoids that regardless of what the other column
+       is showing. align-items:center is still the default CROSS-axis
        (horizontal) behavior for children that don't override it — see
        .column-info and .viewer-extraction's own comments for why each of
        them deliberately does, or doesn't. */
@@ -373,7 +379,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-start;
     }
     /* Deliberately NOT width:100% / align-self:stretch — sizes to its own
        content (the Details table's natural, usually-compact width) so
@@ -526,18 +532,16 @@
        column actually allowed. align-self:stretch overrides .viewer-
        column's default align-items:center (which .column-info still
        relies on, deliberately, for its own centering) — an override on
-       the CROSS axis only, so it has no effect on the vertical centering
-       justify-content:center still provides for the pair as a whole.
-       flex-grow:1 lets this consume spare vertical space in .viewer-column
-       instead of leaving it as empty centering margin above/below the
-       table+extraction pair — flex-grow absorbs available free space
-       BEFORE justify-content ever gets a chance to distribute any, so the
-       two don't conflict: when there's no spare space, this has nothing
-       to grow into and behaves exactly as before. display:flex;
-       flex-direction:column lets its own children (the tab row,
-       .viewer-extraction-body) in turn participate in that same growth —
-       see .viewer-extraction-body's own comment for the next link in the
-       chain. */
+       the CROSS (horizontal) axis only; the vertical axis is governed by
+       .viewer-column's own justify-content:flex-start, unaffected by
+       this. flex-grow:1 lets this consume spare vertical space in
+       .viewer-column instead of leaving it unused below the table+
+       extraction pair — when there's no spare space, this has nothing to
+       grow into and behaves exactly as its own natural content height.
+       display:flex; flex-direction:column lets its own children (the tab
+       row, .viewer-extraction-body) in turn participate in that same
+       growth — see .viewer-extraction-body's own comment for the next
+       link in the chain. */
     .viewer-extraction {
       margin-top: 4px;
       width: 100%;
