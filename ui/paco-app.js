@@ -3015,6 +3015,17 @@
     appState = { ...appState, config: { ...appState.config, theme: t } };
     dom.html.setAttribute('data-theme', t);
     // TODO: persist via config-update task
+
+    // F3 Viewer extraction iframes bake the CURRENT theme's text color/
+    // font into their composed srcdoc at render time (see
+    // _sampleDetailsTextStyle/composeIframeDocument) — nothing about an
+    // already-rendered iframe updates on its own when the theme changes
+    // out from under it, since the CSS variables it was built from were
+    // resolved once, into a plain string, at compose time, not live-
+    // linked. Re-rendering picks up the new [data-theme] just set above
+    // and rebuilds each iframe's srcdoc from a fresh sample. A no-op if
+    // the Viewer isn't currently open.
+    renderViewer();
   });
 
   // Patch adapter reconnect indicator
