@@ -321,7 +321,15 @@
   function _applyViewerFit() {
     if (!appState.viewerOpen) return;
 
-    const columns = dom.viewerContent.querySelectorAll('.column-info');
+    // Measures .viewer-column itself, not just .column-info — the "View
+    // as" extraction block is a SEPARATE sibling of .column-info (see its
+    // own CSS comment for why), so .column-info's own scrollHeight no
+    // longer includes it at all. Measuring the whole column instead
+    // correctly sums both children's rendered heights regardless of
+    // whether a given column has an extraction block at all (a multi-
+    // selection column doesn't, and this still works correctly for it —
+    // .viewer-column.scrollHeight then just equals .column-info's own).
+    const columns = dom.viewerContent.querySelectorAll('.viewer-column');
     if (columns.length === 0) return; // empty-state or not yet rendered
 
     let tallest = 0;

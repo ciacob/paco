@@ -527,11 +527,24 @@
        column's default align-items:center (which .column-info still
        relies on, deliberately, for its own centering) — an override on
        the CROSS axis only, so it has no effect on the vertical centering
-       justify-content:center still provides for the pair as a whole. */
+       justify-content:center still provides for the pair as a whole.
+       flex-grow:1 lets this consume spare vertical space in .viewer-column
+       instead of leaving it as empty centering margin above/below the
+       table+extraction pair — flex-grow absorbs available free space
+       BEFORE justify-content ever gets a chance to distribute any, so the
+       two don't conflict: when there's no spare space, this has nothing
+       to grow into and behaves exactly as before. display:flex;
+       flex-direction:column lets its own children (the tab row,
+       .viewer-extraction-body) in turn participate in that same growth —
+       see .viewer-extraction-body's own comment for the next link in the
+       chain. */
     .viewer-extraction {
       margin-top: 4px;
       width: 100%;
       align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      flex-grow: 1;
     }
     .viewer-extraction-tabs {
       display: flex;
@@ -557,19 +570,34 @@
     }
     .viewer-tab:hover { background: var(--bg3); color: var(--text); }
     .viewer-tab.active { background: var(--active-tab); color: var(--text); font-weight: 600; }
+    /* min-height:120px is an UNRELATED, existing floor for the spinner/
+       error cases (so this doesn't collapse to near-zero while showing
+       just a small spinner or message) — untouched by flex-grow:1 below,
+       which only ever ADDS height beyond whatever this would otherwise
+       be, consuming whatever spare height .viewer-extraction was just
+       given rather than leaving it unused. */
     .viewer-extraction-body {
       display: flex;
       align-items: center;
       justify-content: center;
       min-height: 120px;
       width: 100%;
+      flex-grow: 1;
     }
+    /* align-self:stretch fills whatever height .viewer-extraction-body
+       now has (only the iframe — the spinner and error message are
+       plain siblings under the SAME body and keep the default centered,
+       intrinsic-size behavior, since neither of them should stretch).
+       min-height:320px remains a genuine floor either way: stretch can
+       only grow this PAST 320px when there's room, never shrink it
+       below — exactly "keep today's minimum, grow when there's space". */
     .viewer-extraction-frame {
       width: 100%;
       min-height: 320px;
       border: 1px solid var(--border);
       border-radius: 4px;
       background: var(--bg2);
+      align-self: stretch;
     }
     .viewer-extraction-spinner {
       display: inline-block;
