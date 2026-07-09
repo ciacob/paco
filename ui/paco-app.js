@@ -17,6 +17,12 @@
 
   const S = window.uiState;
 
+  // Verbose diagnostic logging, gated behind window.PACO_DEBUG — see
+  // adapter.js's own header comment (it defines the flag and the
+  // `pacoDebug(true/false)` console toggle, since it loads first) for
+  // why this exists and how to turn it on.
+  function _dlog(...args) { if (window.PACO_DEBUG) console.log(...args); }
+
   // ─── App state (single mutable object) ───────────────────────────────────────
 
   // F3 Viewer "View as:" renderer registry — fetched once at boot from
@@ -750,7 +756,7 @@
    * again before it even started).
    */
   function _fetchExtract(side, path, uid) {
-    console.log('[PACO extract] _fetchExtract enqueue', { side, path, uid });
+    _dlog('[PACO extract] _fetchExtract enqueue', { side, path, uid });
     for (let i = _extractPending.length - 1; i >= 0; i--) {
       if (_extractPending[i].side === side) _extractPending.splice(i, 1);
     }
@@ -759,12 +765,12 @@
   }
 
   function _drainExtractQueue() {
-    if (_extractInFlight) { console.log('[PACO extract] _drainExtractQueue: already in flight, will drain later'); return; }
-    if (appState.busy) { console.log('[PACO extract] _drainExtractQueue: appState.busy, deferring'); return; }
+    if (_extractInFlight) { _dlog('[PACO extract] _drainExtractQueue: already in flight, will drain later'); return; }
+    if (appState.busy) { _dlog('[PACO extract] _drainExtractQueue: appState.busy, deferring'); return; }
     const next = _extractPending.shift();
     if (!next) return;
 
-    console.log('[PACO extract] _drainExtractQueue: starting', next);
+    _dlog('[PACO extract] _drainExtractQueue: starting', next);
     _extractInFlight = true;
     _runExtractFetch(next.side, next.path, next.uid).finally(() => {
       _extractInFlight = false;
@@ -789,14 +795,14 @@
    * uid was submitted.
    */
   async function _runExtractFetch(side, path, uid) {
-    console.log('[PACO extract] _runExtractFetch: assigning', { side, path, uid });
+    _dlog('[PACO extract] _runExtractFetch: assigning', { side, path, uid });
     const outcome = await _assignAndAwaitResult('worker/tasks/extract-preview.js', {
       panel: side,
       path,
       uid,
       timeoutMs: appState.config.extractionTimeoutMs,
     });
-    console.log('[PACO extract] _runExtractFetch: outcome received', { side, path, uid, outcome });
+    _dlog('[PACO extract] _runExtractFetch: outcome received', { side, path, uid, outcome });
 
     // Only apply if this is still the same file AND the same job we
     // started — a selection change or a tab switch may have replaced
@@ -804,26 +810,26 @@
     // during the round-trip.
     const current = _extractState[side];
     if (!current || current.path !== path) {
-      console.log('[PACO extract] _runExtractFetch: state moved on, discarding outcome', {
+      _dlog('[PACO extract] _runExtractFetch: state moved on, discarding outcome', {
         side, expectedPath: path, currentPath: current && current.path,
       });
       return;
     }
     const job = current.byUid[uid];
     if (!job || job.status !== 'running') {
-      console.log('[PACO extract] _runExtractFetch: byUid entry no longer running, discarding outcome', { side, path, uid, job });
+      _dlog('[PACO extract] _runExtractFetch: byUid entry no longer running, discarding outcome', { side, path, uid, job });
       return;
     }
 
     if (!outcome || !outcome.ok || !outcome.result || !outcome.result.jobId) {
       const errText = (outcome && outcome.error) || 'Could not start the preview';
-      console.log('[PACO extract] _runExtractFetch: assign did not yield a jobId, marking error', { side, path, uid, errText });
+      _dlog('[PACO extract] _runExtractFetch: assign did not yield a jobId, marking error', { side, path, uid, errText });
       current.byUid[uid] = { status: 'error', jobId: null, html: null, kind: null, error: errText };
       renderViewer();
       return;
     }
 
-    console.log('[PACO extract] _runExtractFetch: got real jobId, now tracking it', { side, path, uid, jobId: outcome.result.jobId });
+    _dlog('[PACO extract] _runExtractFetch: got real jobId, now tracking it', { side, path, uid, jobId: outcome.result.jobId });
     current.byUid[uid] = { status: 'running', jobId: outcome.result.jobId, html: null, kind: null, error: null };
   }
 
@@ -855,15 +861,15 @@
   function _startExtract(side, path, uid) {
     const state = _extractState[side];
     if (!state || state.path !== path) {
-      console.log('[PACO extract] _startExtract: no-op, state moved on already', { side, path, uid, statePath: state && state.path });
+      _dlog('[PACO extract] _startExtract: no-op, state moved on already', { side, path, uid, statePath: state && state.path });
       return;
     }
     if (state.byUid[uid] && state.byUid[uid].status !== 'error') {
-      console.log('[PACO extract] _startExtract: no-op, already running/done', { side, path, uid, existing: state.byUid[uid] });
+      _dlog('[PACO extract] _startExtract: no-op, already running/done', { side, path, uid, existing: state.byUid[uid] });
       return;
     }
 
-    console.log('[PACO extract] _startExtract: starting', { side, path, uid });
+    _dlog('[PACO extract] _startExtract: starting', { side, path, uid });
     state.byUid[uid] = { status: 'running', jobId: null, html: null, kind: null, error: null };
     _fetchExtract(side, path, uid);
   }
@@ -877,17 +883,17 @@
    */
   function _cancelExtractIfRunning(side) {
     const state = _extractState[side];
-    if (!state) { console.log('[PACO extract] _cancelExtractIfRunning: nothing tracked for side', side); return; }
+    if (!state) { _dlog('[PACO extract] _cancelExtractIfRunning: nothing tracked for side', side); return; }
     let cancelledAny = false;
     for (const uid of Object.keys(state.byUid)) {
       const job = state.byUid[uid];
       if (job.status === 'running' && job.jobId) {
         cancelledAny = true;
-        console.log('[PACO extract] _cancelExtractIfRunning: cancelling', { side, uid, jobId: job.jobId, forPath: state.path });
+        _dlog('[PACO extract] _cancelExtractIfRunning: cancelling', { side, uid, jobId: job.jobId, forPath: state.path });
         adapter.assign('worker/tasks/cancel-extract.js', { jobId: job.jobId }).catch(() => {});
       }
     }
-    if (!cancelledAny) console.log('[PACO extract] _cancelExtractIfRunning: nothing currently running to cancel', { side, forPath: state.path, byUid: state.byUid });
+    if (!cancelledAny) _dlog('[PACO extract] _cancelExtractIfRunning: nothing currently running to cancel', { side, forPath: state.path, byUid: state.byUid });
   }
 
   /**
@@ -902,19 +908,19 @@
     const side = panel === 'right' ? 'right' : 'left';
     const state = _extractState[side];
     if (!state) {
-      console.log('[PACO extract] _handleExtractResult: STALE — no state tracked at all for side', { side, jobId });
+      _dlog('[PACO extract] _handleExtractResult: STALE — no state tracked at all for side', { side, jobId });
       return;
     }
 
     const uid = Object.keys(state.byUid).find(u => state.byUid[u].jobId === jobId);
     if (!uid) {
-      console.log('[PACO extract] _handleExtractResult: STALE — jobId not found in current byUid, discarding', {
+      _dlog('[PACO extract] _handleExtractResult: STALE — jobId not found in current byUid, discarding', {
         side, jobId, statePath: state.path, currentByUid: state.byUid,
       });
       return; // stale — discard
     }
 
-    console.log('[PACO extract] _handleExtractResult: MATCHED', { side, jobId, uid, ok: result && result.ok, statePath: state.path });
+    _dlog('[PACO extract] _handleExtractResult: MATCHED', { side, jobId, uid, ok: result && result.ok, statePath: state.path });
 
     if (result && result.ok) {
       state.byUid[uid] = { status: 'done', jobId, html: result.html, kind: result.kind || null, error: null };
@@ -1286,7 +1292,7 @@
 
     let state = _extractState[side];
     if (!state || state.path !== entry.path) {
-      console.log('[PACO extract] _renderViewerExtraction: NEW FILE, replacing state', {
+      _dlog('[PACO extract] _renderViewerExtraction: NEW FILE, replacing state', {
         side, oldPath: state && state.path, newPath: entry.path,
       });
       // Cancel whatever the PREVIOUS file's extraction state was tracking
@@ -1579,7 +1585,7 @@
     const p        = appState.panels[side];
     const taskPath = targetPath || p.path || '';
     const tabId    = opts.tabId || p.activeTab;
-    console.log('[PACO] navigate', side, taskPath, 'tab:', tabId);
+    _dlog('[PACO] navigate', side, taskPath, 'tab:', tabId);
     adapter.assign('worker/tasks/navigate.js', {
       panel:       side,
       path:        taskPath,
@@ -1588,7 +1594,7 @@
       tabs:        p.tabs,
       activeTab:   tabId,
       pushHistory: opts.pushHistory !== false,
-    }).then(r => console.log('[PACO] assign accepted', r))
+    }).then(r => _dlog('[PACO] assign accepted', r))
       .catch(err => { console.error('[PACO] assign failed', err); showError('Navigation failed', err.message); });
   }
 
@@ -1609,7 +1615,7 @@
     if (!ws) return;
 
     const s = ws.state || 'idle';
-    console.log('[PACO ws]', s, ws.percent != null ? ws.percent+'%' : '', ws.message || '', ws.result ? '(has result)' : '');
+    _dlog('[PACO ws]', s, ws.percent != null ? ws.percent+'%' : '', ws.message || '', ws.result ? '(has result)' : '');
     dom.connDot.className = 'conn-dot ok';
 
     // ── Busy bar ────────────────────────────────────────────────────────────
@@ -1700,10 +1706,10 @@
       if (appState._taskResultResolve) {
         const resolve = appState._taskResultResolve;
         appState = { ...appState, _taskResultResolve: null };
-        console.log('[PACO wire] done: _taskResultResolve FIRED with', JSON.stringify(result));
+        _dlog('[PACO wire] done: _taskResultResolve FIRED with', JSON.stringify(result));
         resolve({ ok: true, result });
       } else {
-        console.log('[PACO wire] done: _taskResultResolve was empty, nothing consumed this result', JSON.stringify(result));
+        _dlog('[PACO wire] done: _taskResultResolve was empty, nothing consumed this result', JSON.stringify(result));
       }
 
       // Continue draining watch queue if more panels need refreshing
@@ -1758,10 +1764,10 @@
             // that just failed.
             const resolve = appState._taskResultResolve;
             appState = { ...appState, _taskResultResolve: null };
-            console.log('[PACO wire] error: _taskResultResolve FIRED with', errMsg);
+            _dlog('[PACO wire] error: _taskResultResolve FIRED with', errMsg);
             resolve({ ok: false, error: errMsg || 'Unknown error' });
           } else {
-            console.log('[PACO wire] error: no resolver was waiting, showing to user:', errMsg);
+            _dlog('[PACO wire] error: no resolver was waiting, showing to user:', errMsg);
             showError('Error', errMsg || 'Unknown error');
           }
           adapter.reset().catch(() => {});
@@ -1810,7 +1816,7 @@
 
     // ── Boot trigger on first idle ───────────────────────────────────────
     const bootAction = S.nextBootAction(appState.bootPhase, ws);
-    console.log('[PACO boot]', appState.bootPhase, s, '->', bootAction.action);
+    _dlog('[PACO boot]', appState.bootPhase, s, '->', bootAction.action);
     if (bootAction.action === 'navigate-left') {
       appState = { ...appState, bootPhase: S.advanceBootPhase(appState.bootPhase, bootAction.action) };
       navigate('left', '');

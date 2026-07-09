@@ -17,6 +17,40 @@
 
   const BASE_URL = window.location.origin;
 
+  // Verbose diagnostic logging — the wire-level tracing below, plus every
+  // similarly-verbose [PACO ...] log in paco-app.js — is OFF by default.
+  // It earned its keep during a long debugging session where seeing every
+  // outgoing assign() and every incoming WS message, in order, was what
+  // actually let a real race condition get found and fixed — but it's
+  // pure noise for normal day-to-day use, so it's gated behind a single
+  // shared flag rather than always-on. Toggle from the browser console:
+  //   pacoDebug(true)   — turn on, persists across reloads
+  //   pacoDebug(false)  — turn back off
+  // Defined here (adapter.js loads before paco-app.js — see index.html's
+  // own script order) so both files can reference the same window-level
+  // flag without either needing to redefine it.
+  let _debugStored = '0';
+  try { _debugStored = localStorage.getItem('paco-debug') || '0'; } catch (_) {}
+  window.PACO_DEBUG = _debugStored === '1';
+  window.pacoDebug = function (on) {
+    window.PACO_DEBUG = !!on;
+    try { localStorage.setItem('paco-debug', window.PACO_DEBUG ? '1' : '0'); } catch (_) {}
+    console.log('[PACO] verbose logging', window.PACO_DEBUG ? 'ENABLED' : 'disabled');
+  };
+  function _dlog(...args) { if (window.PACO_DEBUG) console.log(...args); }
+
+  // Printed unconditionally (not gated by PACO_DEBUG itself — nobody
+  // would ever see the instructions for turning it ON if they were only
+  // shown while already on) so the toggle is discoverable right where
+  // anyone debugging PACO is already looking, rather than relying on
+  // someone remembering it exists or digging through source comments.
+  console.log(
+    '%c[PACO]%c verbose diagnostic logging (every assign()/WS message, in order) is available but OFF by default. Run %cpacoDebug(true)%c to enable it — the setting persists across reloads. %cpacoDebug(false)%c to turn it back off.',
+    'color:#4a9eff;font-weight:bold', 'color:inherit',
+    'color:#4a9eff;font-weight:bold', 'color:inherit',
+    'color:#4a9eff;font-weight:bold', 'color:inherit'
+  );
+
   // Comprehensive wire-level tracing — every outgoing assign() and every
   // incoming WS message, logged here unconditionally, since this is the
   // one place both actually pass through regardless of which caller (F3
@@ -67,7 +101,7 @@
         try {
           const state = JSON.parse(event.data);
           const n = ++_wireSeq;
-          console.log(`[PACO wire] #${n} <- WS`, JSON.stringify(state));
+          _dlog(`[PACO wire] #${n} <- WS`, JSON.stringify(state));
           if (this._onStateChange) this._onStateChange(state);
         } catch (_) {}
       };
@@ -119,12 +153,12 @@
 
     assign(modulePath, config) {
       const n = ++_wireSeq;
-      console.log(`[PACO wire] #${n} -> assign`, modulePath, JSON.stringify(config || {}));
+      _dlog(`[PACO wire] #${n} -> assign`, modulePath, JSON.stringify(config || {}));
       return this._post('/worker/assign', { modulePath, config: config || {} }).then((res) => {
-        console.log(`[PACO wire] #${n} <- assign accepted`, modulePath, JSON.stringify(res));
+        _dlog(`[PACO wire] #${n} <- assign accepted`, modulePath, JSON.stringify(res));
         return res;
       }).catch((err) => {
-        console.log(`[PACO wire] #${n} <- assign REJECTED`, modulePath, err && err.message);
+        _dlog(`[PACO wire] #${n} <- assign REJECTED`, modulePath, err && err.message);
         throw err;
       });
     }
