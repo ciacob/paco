@@ -1962,6 +1962,8 @@ describe('viewer-details task', () => {
     const { ok, result } = await promise;
     assert.ok(ok, result && result.error);
     assert.match(result.kindLabel, /^text \u2014 /);
+    assert.equal(result.mime, null, 'file-type finds no signature for markdown');
+    assert.equal(result.isTextual, true);
   });
 
   test('returns a kindLabel for a real binary signature (PNG)', async () => {
@@ -1977,9 +1979,11 @@ describe('viewer-details task', () => {
     const { ok, result } = await promise;
     assert.ok(ok);
     assert.equal(result.kindLabel, 'binary \u2014 image/png file');
+    assert.equal(result.mime, 'image/png');
+    assert.equal(result.isTextual, false, 'mime found -> forced non-textual, per file-handler-detect.js');
   });
 
-  test('kindLabel is null for a folder (no Type row in that case)', async () => {
+  test('kindLabel, mime, and isTextual are all null for a folder (no Type row in that case)', async () => {
     const target = path.join(workDir, 'a-folder');
     await fsp.mkdir(target);
     purgeCache('worker/tasks/viewer-details');
@@ -1991,6 +1995,8 @@ describe('viewer-details task', () => {
     const { ok, result } = await promise;
     assert.ok(ok);
     assert.equal(result.kindLabel, null);
+    assert.equal(result.mime, null);
+    assert.equal(result.isTextual, null);
   });
 
   test('includes owner and octal permissions on POSIX',
@@ -2168,6 +2174,53 @@ describe('calc-size task', () => {
     await new Promise(r => setTimeout(r, 600));
     stub.restore();
   });
+
+  test('reports a timeout error and cleans up the registry when timeoutMs elapses before the child responds', async () => {
+    const target = path.join(workDir, 'calc-timeout-target.txt');
+    await mkfile(target, 'x'.repeat(1000));
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/calc-size');
+    purgeCache('paco/calc-registry');
+    const registry = require('../paco/calc-registry');
+    const task = require('../worker/tasks/calc-size');
+    // Same reasoning as extract-preview's own timeout test: 1ms is shorter
+    // than any real calculation can complete in, so this deterministically
+    // exercises the timeout path without needing a fixture that hangs.
+    const { ctx, promise } = makeCtx({ panel: 'left', paths: [target], timeoutMs: 1 });
+
+    task.start(ctx);
+    const { result } = await promise;
+    await new Promise(r => setTimeout(r, 300));
+    stub.restore();
+
+    const relayed = stub.sent.find(e => e.type === 'EVT_CALC_RESULT' && e.payload.calcId === result.calcId);
+    assert.ok(relayed, 'should have relayed a timeout EVT_CALC_RESULT message');
+    assert.equal(relayed.payload.result.ok, false);
+    assert.match(relayed.payload.result.error, /timed out after 1ms/);
+    assert.equal(registry.get(result.calcId), undefined, 'registry entry should be cleaned up after the timeout fires');
+  });
+
+  test('falls back to the default (5 minute) timeout when config.timeoutMs is absent', async () => {
+    const target = path.join(workDir, 'calc-default-timeout.txt');
+    await mkfile(target, 'x'.repeat(1000));
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/calc-size');
+    purgeCache('paco/calc-registry');
+    const task = require('../worker/tasks/calc-size');
+    const { ctx, promise } = makeCtx({ panel: 'left', paths: [target] }); // no timeoutMs
+
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+
+    await new Promise(r => setTimeout(r, 600));
+    stub.restore();
+    const relayed = stub.sent.find(e => e.type === 'EVT_CALC_RESULT' && e.payload.calcId === result.calcId);
+    assert.ok(relayed);
+    assert.equal(relayed.payload.result.ok, true, 'should complete normally, well within the 5-minute default');
+  });
 });
 
 describe('cancel-calc task', () => {
@@ -2229,6 +2282,305 @@ describe('cancel-calc task', () => {
     stub.restore();
     const relayed = stub.sent.find(e => e.payload && e.payload.calcId === result.calcId);
     assert.equal(relayed, undefined, 'a cancelled calculation must never relay a result');
+  });
+});
+
+// ─── extract-preview / cancel-extract tasks (F3 iframe extraction) ────────────
+
+// Real uids from the shipped paco/renderers/*/renderer.json manifests —
+// deliberately the real files, not synthetic fixtures, since the point of
+// these tests is confirming the real wiring (registry lookup -> glue.js ->
+// child process -> real extractor) works end to end.
+const GENERIC_TEXT_UID   = 'b966f135-3519-492c-a89a-fec5e814df72';
+const GENERIC_BINARY_UID = '0c10a212-57d3-44bc-8edc-de14c053f36d';
+const THUMBNAIL_UID      = '17fddfa0-3196-4c83-908e-6898722892b1';
+
+describe('extract-preview task', () => {
+  test('fails when no panel is specified', async () => {
+    purgeCache('worker/tasks/extract-preview');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: '', path: workDir, uid: GENERIC_TEXT_UID });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no panel specified/i);
+  });
+
+  test('fails when no path is specified', async () => {
+    purgeCache('worker/tasks/extract-preview');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: '', uid: GENERIC_TEXT_UID });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no item specified/i);
+  });
+
+  test('fails when no uid is specified', async () => {
+    purgeCache('worker/tasks/extract-preview');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: workDir, uid: '' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no renderer specified/i);
+  });
+
+  test('fails when the uid does not match any registered renderer', async () => {
+    purgeCache('worker/tasks/extract-preview');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: workDir, uid: 'not-a-real-uid' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /unknown renderer/i);
+  });
+
+  test('returns a jobId immediately without waiting for extraction', async () => {
+    const target = path.join(workDir, 'extract-target.txt');
+    await mkfile(target, 'hello world\n'.repeat(10));
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/extract-preview');
+    purgeCache('paco/extract-registry');
+    const registry = require('../paco/extract-registry');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: target, uid: GENERIC_TEXT_UID });
+
+    const start = Date.now();
+    task.start(ctx);
+    const { ok, result } = await promise;
+    const elapsed = Date.now() - start;
+
+    assert.ok(ok);
+    assert.equal(typeof result.jobId, 'string');
+    assert.ok(result.jobId.length > 0);
+    assert.ok(elapsed < 200, `took ${elapsed}ms — should return near-instantly`);
+
+    await new Promise(r => setTimeout(r, 600));
+    stub.restore();
+    assert.equal(registry.size(), 0, 'registry entry should be cleaned up after the child reports');
+  });
+
+  test('relays real generic-extractor (text) HTML back via process.send', async () => {
+    const target = path.join(workDir, 'extract-text.txt');
+    await mkfile(target, 'Hello from a real file\n');
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/extract-preview');
+    purgeCache('paco/extract-registry');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: target, uid: GENERIC_TEXT_UID });
+
+    task.start(ctx);
+    const { result } = await promise;
+
+    await new Promise(r => setTimeout(r, 800));
+    stub.restore();
+
+    const relayed = stub.sent.find(e => e.type === 'EVT_EXTRACT_RESULT');
+    assert.ok(relayed, 'should have relayed an EXTRACT_RESULT message');
+    assert.equal(relayed.payload.jobId, result.jobId);
+    assert.equal(relayed.payload.panel, 'left');
+    assert.equal(relayed.payload.result.ok, true);
+    assert.match(relayed.payload.result.html, /Hello from a real file/);
+    assert.equal(relayed.payload.result.kind, null, 'generic-extractor has no kind to report');
+  });
+
+  test('relays real generic-extractor (binary) HTML for a non-textual file', async () => {
+    const target = path.join(workDir, 'extract-binary.bin');
+    await fsp.writeFile(target, Buffer.from([0x00, 0x01, 0xff, 0xfe, 0x41, 0x42]));
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/extract-preview');
+    purgeCache('paco/extract-registry');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: 'right', path: target, uid: GENERIC_BINARY_UID });
+
+    task.start(ctx);
+    const { result } = await promise;
+    await new Promise(r => setTimeout(r, 800));
+    stub.restore();
+
+    const relayed = stub.sent.find(e => e.type === 'EVT_EXTRACT_RESULT');
+    assert.ok(relayed);
+    assert.equal(relayed.payload.result.ok, true);
+    assert.match(relayed.payload.result.html, /data-mode="binary"/);
+  });
+
+  test('relays real image-extractor thumbnail HTML for a real PNG', async () => {
+    const sharp = require('sharp');
+    const target = path.join(workDir, 'extract-image.png');
+    const buf = await sharp({ create: { width: 4, height: 4, channels: 3, background: 'blue' } }).png().toBuffer();
+    await fsp.writeFile(target, buf);
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/extract-preview');
+    purgeCache('paco/extract-registry');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: target, uid: THUMBNAIL_UID });
+
+    task.start(ctx);
+    const { result } = await promise;
+    await new Promise(r => setTimeout(r, 1500));
+    stub.restore();
+
+    const relayed = stub.sent.find(e => e.type === 'EVT_EXTRACT_RESULT');
+    assert.ok(relayed, 'should have relayed an EXTRACT_RESULT message');
+    assert.equal(relayed.payload.result.ok, true);
+    assert.match(relayed.payload.result.html, /data:image\/webp;base64/);
+  });
+
+  test('relays a failure result when the target file does not exist', async () => {
+    const target = path.join(workDir, 'does-not-exist.txt');
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/extract-preview');
+    purgeCache('paco/extract-registry');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: target, uid: GENERIC_TEXT_UID });
+
+    task.start(ctx);
+    const { result } = await promise;
+    await new Promise(r => setTimeout(r, 600));
+    stub.restore();
+
+    const relayed = stub.sent.find(e => e.type === 'EVT_EXTRACT_RESULT');
+    assert.ok(relayed);
+    assert.equal(relayed.payload.result.ok, false);
+    assert.equal(typeof relayed.payload.result.error, 'string');
+  });
+
+  test('registers the spawned child in the registry under the returned jobId', async () => {
+    const sharp = require('sharp');
+    const target = path.join(workDir, 'extract-registry-check.png');
+    const buf = await sharp({ create: { width: 400, height: 400, channels: 3, background: 'red' } }).png().toBuffer();
+    await fsp.writeFile(target, buf);
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/extract-preview');
+    purgeCache('paco/extract-registry');
+    const registry = require('../paco/extract-registry');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: target, uid: THUMBNAIL_UID });
+
+    task.start(ctx);
+    const { result } = await promise;
+
+    assert.ok(registry.get(result.jobId), 'registry should have an entry for the returned jobId');
+
+    await new Promise(r => setTimeout(r, 1500));
+    stub.restore();
+  });
+
+  test('reports a timeout error and cleans up the registry when timeoutMs elapses before the child responds', async () => {
+    const target = path.join(workDir, 'extract-timeout.txt');
+    await mkfile(target, 'hello world\n'.repeat(10));
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/extract-preview');
+    purgeCache('paco/extract-registry');
+    const registry = require('../paco/extract-registry');
+    const task = require('../worker/tasks/extract-preview');
+    // 1ms is shorter than any real extraction can complete in — this
+    // deterministically exercises the timeout path itself (fires, reports,
+    // cleans up, kills the child) without needing a fixture that hangs
+    // forever, which is the actual real-world trigger but much harder to
+    // construct reliably in a test.
+    const { ctx, promise } = makeCtx({ panel: 'left', path: target, uid: GENERIC_TEXT_UID, timeoutMs: 1 });
+
+    task.start(ctx);
+    const { result } = await promise;
+    await new Promise(r => setTimeout(r, 300));
+    stub.restore();
+
+    const relayed = stub.sent.find(e => e.type === 'EVT_EXTRACT_RESULT' && e.payload.jobId === result.jobId);
+    assert.ok(relayed, 'should have relayed a timeout EXTRACT_RESULT message');
+    assert.equal(relayed.payload.result.ok, false);
+    assert.match(relayed.payload.result.error, /timed out after 1ms/);
+    assert.equal(registry.get(result.jobId), undefined, 'registry entry should be cleaned up after the timeout fires');
+  });
+
+  test('falls back to the default timeout when config.timeoutMs is absent', async () => {
+    // Not exercising the actual wait (30s default would make this test
+    // absurdly slow) — just confirming a missing timeoutMs doesn't throw
+    // and the task still completes normally for a fast, real extraction.
+    const target = path.join(workDir, 'extract-default-timeout.txt');
+    await mkfile(target, 'hello\n');
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/extract-preview');
+    purgeCache('paco/extract-registry');
+    const task = require('../worker/tasks/extract-preview');
+    const { ctx, promise } = makeCtx({ panel: 'left', path: target, uid: GENERIC_TEXT_UID }); // no timeoutMs
+
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(typeof result.jobId, 'string');
+
+    await new Promise(r => setTimeout(r, 600));
+    stub.restore();
+    const relayed = stub.sent.find(e => e.type === 'EVT_EXTRACT_RESULT' && e.payload.jobId === result.jobId);
+    assert.ok(relayed);
+    assert.equal(relayed.payload.result.ok, true, 'should complete normally, well within the 30s default');
+  });
+});
+
+describe('cancel-extract task', () => {
+  test('fails when no jobId is specified', async () => {
+    purgeCache('worker/tasks/cancel-extract');
+    const task = require('../worker/tasks/cancel-extract');
+    const { ctx, promise } = makeCtx({ jobId: '' });
+    task.start(ctx);
+    const { ok, error } = await promise;
+    assert.ok(!ok);
+    assert.match(error, /no extraction job id specified/i);
+  });
+
+  test('reports cancelled:false for an unknown jobId (not an error)', async () => {
+    purgeCache('worker/tasks/cancel-extract');
+    const task = require('../worker/tasks/cancel-extract');
+    const { ctx, promise } = makeCtx({ jobId: 'this-id-does-not-exist' });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok);
+    assert.equal(result.cancelled, false);
+  });
+
+  test('kills the real child process and removes the registry entry', async () => {
+    const sharp = require('sharp');
+    const target = path.join(workDir, 'cancel-extract-target.png');
+    const buf = await sharp({ create: { width: 800, height: 800, channels: 3, background: 'green' } }).png().toBuffer();
+    await fsp.writeFile(target, buf);
+
+    const stub = stubProcessSend();
+    purgeCache('worker/tasks/extract-preview');
+    purgeCache('worker/tasks/cancel-extract');
+    purgeCache('paco/extract-registry');
+    const registry       = require('../paco/extract-registry');
+    const extractPreview = require('../worker/tasks/extract-preview');
+    const cancelExtract  = require('../worker/tasks/cancel-extract');
+
+    const { ctx: ctx1, promise: p1 } = makeCtx({ panel: 'left', path: target, uid: THUMBNAIL_UID });
+    extractPreview.start(ctx1);
+    const { result } = await p1;
+
+    const child = registry.get(result.jobId);
+    assert.ok(child, 'child should be registered');
+
+    const { ctx: ctx2, promise: p2 } = makeCtx({ jobId: result.jobId });
+    cancelExtract.start(ctx2);
+    const { ok, result: cancelResult } = await p2;
+
+    assert.ok(ok);
+    assert.equal(cancelResult.cancelled, true);
+    assert.equal(registry.get(result.jobId), undefined, 'registry entry should be removed immediately on cancel');
+
+    await new Promise(r => setTimeout(r, 500));
+    stub.restore();
+    const relayed = stub.sent.find(e => e.payload && e.payload.jobId === result.jobId);
+    assert.equal(relayed, undefined, 'a cancelled extraction must never relay a result');
   });
 });
 

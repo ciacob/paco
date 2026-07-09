@@ -170,6 +170,29 @@ function spawnWorker() {
         }
         break;
 
+      case EVT.EXTRACT_RESULT: {
+        // Same reasoning as EVT.CALC_RESULT immediately above, for the F3
+        // iframe extraction pipeline instead — see
+        // worker/tasks/extract-preview.js. Logged as a SUMMARY, not the
+        // raw payload: result.html can be tens of KB (a real photo's
+        // base64-encoded thumbnail easily runs 80,000+ characters), and
+        // every single extraction going through here would otherwise
+        // dump that in full on every run — worthless for a human reading
+        // the log, and the exact thing that made an earlier debugging
+        // session's log too large to share for analysis.
+        const r = envelope.payload && envelope.payload.result;
+        const summary = r
+          ? (r.ok
+            ? `ok=true kind=${r.kind || 'null'} html.length=${r.html ? r.html.length : 0}`
+            : `ok=false error=${JSON.stringify(r.error)}`)
+          : 'no result';
+        log('worker', 'extract result', { jobId: envelope.payload && envelope.payload.jobId, panel: envelope.payload && envelope.payload.panel, summary });
+        if (serverProc && serverProc.connected) {
+          serverProc.send(msg(SRV.EXTRACT_RESULT, envelope.payload));
+        }
+        break;
+      }
+
       default:
         log('worker', 'unknown event type:', envelope.type);
     }

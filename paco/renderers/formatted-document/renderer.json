@@ -1,0 +1,11 @@
+{
+  "name": "Formatted text",
+  "description": "Renders office documents and PDF/RTF as safe, minimal, semantic HTML via text-extractor. Covers the subset of text-extractor's supported formats that file-type actually detects a binary signature for (docx/pptx/xlsx/odt/odp/ods via their ZIP+internal-structure signature, pdf via its %PDF- header, rtf via its {\\rtf1 header) — confirmed empirically, not assumed: file-handler-detect.js's detectMime() forces file_mode to \"binary\" whenever it finds a signature, regardless of how text-ish the format conceptually is. See formatted-document-plain/renderer.json for the sibling covering this same extractor's remaining formats (csv/md/html), which have no fixed binary signature and are classified file_mode \"text\" instead. Both manifests share the same tab name and the same underlying extractor deliberately — the split exists only because of this project's existing text-vs-binary classification, not because of anything different about how these two groups render.",
+  "uid": "07f9551f-a517-4159-8b5e-a321881f4d5b",
+  "abilities": {
+    "selection_type": "single",
+    "file_mode": "binary",
+    "binary_category": "other",
+    "file_type": ["docx", "pptx", "xlsx", "odt", "odp", "ods", "pdf", "rtf"]
+  }
+}

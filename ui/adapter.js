@@ -17,6 +17,18 @@
 
   const BASE_URL = window.location.origin;
 
+  // Comprehensive wire-level tracing — every outgoing assign() and every
+  // incoming WS message, logged here unconditionally, since this is the
+  // one place both actually pass through regardless of which caller (F3
+  // viewer-details, F3 calc-size, F3 extract-preview, navigate, copy,
+  // mkdir, everything) triggered them. Added after three rounds of
+  // guessing at the exact sequence from partial logs scattered across
+  // paco-app.js — this gives the full, ordered picture in one place
+  // instead. Sequence numbers let the two sides (outgoing assigns,
+  // incoming WS pushes) be correlated by eye even though there's no
+  // request/response id actually threaded through the server.
+  let _wireSeq = 0;
+
   class UIAdapter {
     constructor() {
       this._onStateChange = null;
@@ -54,6 +66,8 @@
       ws.onmessage = (event) => {
         try {
           const state = JSON.parse(event.data);
+          const n = ++_wireSeq;
+          console.log(`[PACO wire] #${n} <- WS`, JSON.stringify(state));
           if (this._onStateChange) this._onStateChange(state);
         } catch (_) {}
       };
@@ -95,12 +109,24 @@
       return this._get('/config');
     }
 
+    getRenderers() {
+      return this._get('/renderers');
+    }
+
     getStatus() {
       return this._get('/worker/status');
     }
 
     assign(modulePath, config) {
-      return this._post('/worker/assign', { modulePath, config: config || {} });
+      const n = ++_wireSeq;
+      console.log(`[PACO wire] #${n} -> assign`, modulePath, JSON.stringify(config || {}));
+      return this._post('/worker/assign', { modulePath, config: config || {} }).then((res) => {
+        console.log(`[PACO wire] #${n} <- assign accepted`, modulePath, JSON.stringify(res));
+        return res;
+      }).catch((err) => {
+        console.log(`[PACO wire] #${n} <- assign REJECTED`, modulePath, err && err.message);
+        throw err;
+      });
     }
 
     pause() {

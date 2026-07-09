@@ -30,6 +30,12 @@
  *                       the result notification so the UI knows which
  *                       column to update)
  *   {string[]} paths — absolute paths to sum the size of
+ *   {number}   [timeoutMs] — how long to wait before giving up and
+ *                            reporting a failure (see DEFAULT_TIMEOUT_MS
+ *                            below — deliberately a much longer default
+ *                            than extract-preview.js's own timeout, since a
+ *                            large/network-mounted folder can legitimately
+ *                            take minutes, not just seconds, to sum).
  *
  * Result (immediate, does not include the calculation itself):
  *   { calcId: string }
@@ -41,9 +47,21 @@ const { fork } = require('child_process');
 const registry = require('../../paco/calc-registry');
 const { EVT, msg } = require('../../shared/messages');
 
+// Falls back to this if the client doesn't send config.timeoutMs — matches
+// paco/context.js's DEFAULT_CONFIG.calcTimeoutMs. Deliberately generous
+// (minutes, not seconds): unlike extract-preview.js's bounded preview
+// renders, a legitimate recursive size sum over a huge or network-mounted
+// tree can genuinely take a while — this timeout exists to catch a truly
+// wedged child (see extract-preview.js's own comment on how that can
+// happen), not to second-guess a large folder.
+const DEFAULT_TIMEOUT_MS = 300000;
+
+// Bound how much stderr we accumulate for a timeout/crash error message.
+const MAX_CAPTURED_STDERR = 4000;
+
 module.exports = {
   async start(ctx) {
-    const { panel, paths } = ctx.config;
+    const { panel, paths, timeoutMs } = ctx.config;
 
     if (!panel) return ctx.fail('No panel specified');
     if (!Array.isArray(paths) || paths.length === 0) {
@@ -52,13 +70,17 @@ module.exports = {
 
     const calcId = crypto.randomUUID();
     const childScript = path.join(__dirname, '..', 'calc-size-child.js');
+    const effectiveTimeoutMs = typeof timeoutMs === 'number' && timeoutMs > 0
+      ? timeoutMs
+      : DEFAULT_TIMEOUT_MS;
 
     let child;
     try {
       child = fork(childScript, [JSON.stringify(paths)], {
         // detached defaults to false — the child dies with the worker
         // process automatically, no explicit option needed for that.
-        silent: true, // don't inherit stdio; we only care about the IPC message
+        silent: true, // don't inherit stdio; piped instead — see the
+                       // stdout/stderr drain below.
       });
     } catch (err) {
       return ctx.fail(`Could not start the size calculation: ${err.message}`);
@@ -66,25 +88,56 @@ module.exports = {
 
     registry.register(calcId, child);
 
+    // Actively drain stdout/stderr rather than leaving them as unread
+    // pipes — see extract-preview.js's own comment on why an unconsumed
+    // pipe can wedge a child forever once it fills up. Less likely to
+    // matter here (calc-size-child.js is plain recursive fs.readdir/lstat,
+    // not a native decoder prone to emitting warnings), but the same
+    // structural gap existed here too, so it gets the same fix.
+    let capturedStderr = '';
+    if (child.stdout) child.stdout.on('data', () => {});
+    if (child.stderr) {
+      child.stderr.on('data', (chunk) => {
+        capturedStderr = (capturedStderr + chunk.toString()).slice(-MAX_CAPTURED_STDERR);
+      });
+    }
+
+    const timeoutTimer = setTimeout(() => {
+      if (registry.get(calcId) !== child) return; // already resolved/cancelled
+      registry.remove(calcId);
+      const suffix = capturedStderr.trim() ? ` — last output: ${capturedStderr.trim()}` : '';
+      _reportResult(calcId, panel, {
+        ok: false,
+        error: `Calculation timed out after ${effectiveTimeoutMs}ms${suffix}`,
+      });
+      try { child.kill(); } catch (_) {}
+    }, effectiveTimeoutMs);
+
     child.once('message', (result) => {
+      clearTimeout(timeoutTimer);
       registry.remove(calcId);
       _reportResult(calcId, panel, result);
       try { child.kill(); } catch (_) {}
     });
 
     child.once('exit', (code, signal) => {
-      // If we got here WITHOUT a 'message' having already fired and removed
-      // the registry entry, the child died without reporting a result
-      // (crashed, was killed by cancel-calc.js, or similar). cancel-calc.js
-      // already removes its own entry before killing, so this is a no-op
-      // in that case; for an unexpected crash, clean up and notify.
+      clearTimeout(timeoutTimer);
+      // Same reasoning as extract-preview.js's own 'exit' listener (see
+      // its comment, and calc-size-child.js's header, for the
+      // process.send()/process.exit() race this also guards against): a
+      // clean exit code is not proof a message went out. cancel-calc.js
+      // already removes its own registry entry before killing, so
+      // signal != null (killed deliberately, or the worker process
+      // exiting) is the one case with nothing to report.
       if (registry.get(calcId) === child) {
         registry.remove(calcId);
-        if (signal == null && code !== 0) {
-          _reportResult(calcId, panel, { ok: false, error: `Calculation process exited with code ${code}` });
+        if (signal == null) {
+          const suffix = capturedStderr.trim() ? ` — last output: ${capturedStderr.trim()}` : '';
+          const reason = code === 0
+            ? `Calculation process exited without reporting a result${suffix}`
+            : `Calculation process exited with code ${code}${suffix}`;
+          _reportResult(calcId, panel, { ok: false, error: reason });
         }
-        // signal != null means it was killed (cancel-calc.js, or the whole
-        // worker process exiting) — no result to report either way.
       }
     });
 

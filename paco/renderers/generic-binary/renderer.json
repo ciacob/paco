@@ -1,0 +1,9 @@
+{
+  "name": "Raw binary",
+  "description": "Base fallback for any single-selection binary file — renders a hex + Latin-1 dump with Find/Find-Next/Find-Prev and hex<->text cross-highlighting, via generic-extractor. Always present alongside a more specific renderer when one applies (see glue.js), and the only tab when none does.",
+  "uid": "0c10a212-57d3-44bc-8edc-de14c053f36d",
+  "abilities": {
+    "selection_type": "single",
+    "file_mode": "binary"
+  }
+}

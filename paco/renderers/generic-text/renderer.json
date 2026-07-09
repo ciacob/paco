@@ -1,0 +1,9 @@
+{
+  "name": "Raw text",
+  "description": "Base fallback for any single-selection text file — renders the raw bytes as monospaced, indent-preserving text with Find/Find-Next/Find-Prev, via generic-extractor. Always present alongside a more specific renderer when one applies (see glue.js), and the only tab when none does.",
+  "uid": "b966f135-3519-492c-a89a-fec5e814df72",
+  "abilities": {
+    "selection_type": "single",
+    "file_mode": "text"
+  }
+}

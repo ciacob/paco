@@ -74,6 +74,17 @@ async function boot() {
     appName: taskPrimerCfg.appName || 'Task Primer',
   }));
 
+  // F3 Viewer "View as:" renderer registry — loaded and validated once at
+  // boot (see paco/renderers/registry.js for what that validation covers),
+  // served as a flat list for the browser's matchRenderers (paco/renderers/
+  // matcher.js, loaded client-side same as ui-state.js) to choose among.
+  // Same "assemble exactly what the UI needs, once, at boot" shape as
+  // /config above — loadRenderers() throws on a real configuration bug
+  // (duplicate uid, missing base renderer), which is deliberately allowed
+  // to crash boot rather than silently serve an incomplete/wrong registry.
+  const renderersList = require('../paco/renderers/registry').loadRenderers();
+  fastify.get('/renderers', async () => renderersList);
+
   await fastify.listen({ port: PORT, host: HOST });
 
   if (process.send) {
@@ -113,6 +124,11 @@ process.on('message', (envelope) => {
     // without needing a second message channel.
     const { calcId, panel, result } = envelope.payload || {};
     require('./ws/status-feed').broadcast({ state: 'calc-result', calcId, panel, result });
+  } else if (envelope.type === SRV.EXTRACT_RESULT) {
+    // Same reasoning as SRV.CALC_RESULT immediately above, for the F3
+    // iframe extraction pipeline instead.
+    const { jobId, panel, result } = envelope.payload || {};
+    require('./ws/status-feed').broadcast({ state: 'extract-result', jobId, panel, result });
   }
 });
 

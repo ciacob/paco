@@ -1442,3 +1442,145 @@ describe('viewerPermissionGrid', () => {
     assert.equal(g.other.r, false);
   });
 });
+
+// ─── viewerRendererClassification / orderRendererTabsForDisplay / siblingMediaRendererName ──
+
+describe('viewerRendererClassification', () => {
+  test('textual file: fileMode "text", binaryCategory null', () => {
+    const c = S.viewerRendererClassification('single', true, null, 'notes.md');
+    assert.deepEqual(c, { selectionType: 'single', fileMode: 'text', binaryCategory: null, fileType: 'md' });
+  });
+
+  test('binary file with a detected image mime', () => {
+    const c = S.viewerRendererClassification('single', false, 'image/png', 'photo.png');
+    assert.deepEqual(c, { selectionType: 'single', fileMode: 'binary', binaryCategory: 'image', fileType: 'png' });
+  });
+
+  test('binary file with a detected mime outside text/audio/image/video -> "other"', () => {
+    const c = S.viewerRendererClassification('single', false, 'application/pdf', 'report.pdf');
+    assert.equal(c.binaryCategory, 'other');
+    assert.equal(c.fileMode, 'binary');
+  });
+
+  test('binary file with no detected mime at all -> "other" (not "text")', () => {
+    const c = S.viewerRendererClassification('single', false, null, 'archive.zip');
+    assert.equal(c.binaryCategory, 'other');
+  });
+
+  test('a name with no extension yields fileType null', () => {
+    const c = S.viewerRendererClassification('single', true, null, 'README');
+    assert.equal(c.fileType, null);
+  });
+
+  test('multi selectionType is passed through unchanged', () => {
+    const c = S.viewerRendererClassification('multi', true, null, 'a.md');
+    assert.equal(c.selectionType, 'multi');
+  });
+});
+
+describe('orderRendererTabsForDisplay', () => {
+  const base = { name: 'Raw binary', abilities: { selection_type: 'single', file_mode: 'binary' } };
+  const specific = { name: 'Thumbnail', abilities: { selection_type: 'single', file_mode: 'binary', binary_category: 'image', file_type: 'png' } };
+  const familySpecific = { name: 'Formatted text', abilities: { selection_type: 'single', file_mode: 'binary', binary_category: 'other', file_type: ['docx', 'pdf'] } };
+
+  test('base renderer moves to the front, specific tab(s) after', () => {
+    const ordered = S.orderRendererTabsForDisplay([specific, base]);
+    assert.deepEqual(ordered.map(t => t.name), ['Raw binary', 'Thumbnail']);
+  });
+
+  test('already-correct order is left as-is', () => {
+    const ordered = S.orderRendererTabsForDisplay([base, specific]);
+    assert.deepEqual(ordered.map(t => t.name), ['Raw binary', 'Thumbnail']);
+  });
+
+  test('a renderer with an array file_type is treated as specific, not base', () => {
+    const ordered = S.orderRendererTabsForDisplay([familySpecific, base]);
+    assert.deepEqual(ordered.map(t => t.name), ['Raw binary', 'Formatted text']);
+  });
+
+  test('a single-tab list (no specific match) is unchanged', () => {
+    const ordered = S.orderRendererTabsForDisplay([base]);
+    assert.deepEqual(ordered.map(t => t.name), ['Raw binary']);
+  });
+
+  test('an empty list stays empty', () => {
+    assert.deepEqual(S.orderRendererTabsForDisplay([]), []);
+  });
+});
+
+describe('siblingMediaRendererName', () => {
+  test('Filmstrip -> Waveform', () => {
+    assert.equal(S.siblingMediaRendererName('Filmstrip'), 'Waveform');
+  });
+
+  test('Waveform -> Filmstrip', () => {
+    assert.equal(S.siblingMediaRendererName('Waveform'), 'Filmstrip');
+  });
+
+  test('any other name -> null', () => {
+    assert.equal(S.siblingMediaRendererName('Thumbnail'), null);
+    assert.equal(S.siblingMediaRendererName('Raw binary'), null);
+    assert.equal(S.siblingMediaRendererName(''), null);
+  });
+});
+
+describe('composeIframeDocument', () => {
+  test('wraps the fragment in a full document with a charset meta and a CSP meta', () => {
+    const doc = S.composeIframeDocument('<p>hello</p>');
+    assert.match(doc, /^<!DOCTYPE html>/);
+    assert.match(doc, /<meta charset="utf-8">/);
+    assert.match(doc, /Content-Security-Policy/);
+    assert.match(doc, /<body><p>hello<\/p><\/body>/);
+  });
+
+  test('CSP has no connect-src/media-src/frame-src, and script-src is unsafe-inline only', () => {
+    const doc = S.composeIframeDocument('<p>x</p>');
+    assert.match(doc, /default-src 'none'/);
+    assert.match(doc, /script-src 'unsafe-inline'/);
+    assert.match(doc, /style-src 'unsafe-inline'/);
+    assert.match(doc, /img-src data:/);
+    assert.doesNotMatch(doc, /connect-src/);
+    assert.doesNotMatch(doc, /frame-src/);
+  });
+
+  test('a null/undefined body does not throw and yields an empty body', () => {
+    assert.match(S.composeIframeDocument(null), /<body><\/body>/);
+    assert.match(S.composeIframeDocument(undefined), /<body><\/body>/);
+  });
+
+  test('does not escape or alter the fragment — the extractor is the trust boundary, not this function', () => {
+    const doc = S.composeIframeDocument('<script>1</script>');
+    assert.match(doc, /<body><script>1<\/script><\/body>/);
+  });
+
+  test('with a textStyle, emits a body style rule with the given color/font-family/font-size', () => {
+    const doc = S.composeIframeDocument('<p>x</p>', { color: 'rgb(201, 205, 212)', fontFamily: 'Arial, sans-serif', fontSize: '13px' });
+    assert.match(doc, /<style>body\{color:rgb\(201, 205, 212\);font-family:Arial, sans-serif;font-size:13px;\}<\/style>/);
+  });
+
+  test('the style block appears before </head>, after the CSP meta', () => {
+    const doc = S.composeIframeDocument('<p>x</p>', { color: 'red', fontFamily: 'monospace', fontSize: '12px' });
+    const cspIndex = doc.indexOf('Content-Security-Policy');
+    const styleIndex = doc.indexOf('<style>');
+    const headCloseIndex = doc.indexOf('</head>');
+    assert.ok(cspIndex < styleIndex, 'style block should come after the CSP meta');
+    assert.ok(styleIndex < headCloseIndex, 'style block should still be inside <head>');
+  });
+
+  test('without a textStyle, no style block is emitted at all (unchanged from before this existed)', () => {
+    const doc = S.composeIframeDocument('<p>x</p>');
+    assert.doesNotMatch(doc, /<style>/);
+  });
+
+  test('a textStyle missing any one of color/fontFamily/fontSize is treated as absent — no partial style block', () => {
+    const doc1 = S.composeIframeDocument('<p>x</p>', { color: 'red', fontFamily: 'monospace' }); // no fontSize
+    const doc2 = S.composeIframeDocument('<p>x</p>', { fontFamily: 'monospace', fontSize: '12px' }); // no color
+    assert.doesNotMatch(doc1, /<style>/);
+    assert.doesNotMatch(doc2, /<style>/);
+  });
+
+  test('null textStyle behaves the same as omitting it', () => {
+    const doc = S.composeIframeDocument('<p>x</p>', null);
+    assert.doesNotMatch(doc, /<style>/);
+  });
+});

@@ -1,0 +1,10 @@
+{
+  "name": "Formatted text",
+  "description": "Renders csv/md/html as safe, minimal, semantic HTML via text-extractor — the sibling of formatted-document/renderer.json, covering the subset of that same extractor's supported formats that file-type finds no binary signature for (confirmed empirically: detectMime() returns null for all three, so the content sniff decides and finds them textual), making file_mode \"text\" here rather than \"binary\". Same tab name, same underlying extractor as formatted-document — this manifest exists only because of the existing text-vs-binary classification split, not because these formats render any differently.",
+  "uid": "1c7a1631-67cc-4c4f-bb05-a5742abe29bc",
+  "abilities": {
+    "selection_type": "single",
+    "file_mode": "text",
+    "file_type": ["csv", "md", "html"]
+  }
+}

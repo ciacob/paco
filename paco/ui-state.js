@@ -980,6 +980,117 @@ function viewerPermissionGrid(mode) {
   };
 }
 
+/**
+ * Build the SelectionClassification shape paco/renderers/matcher.js's
+ * matchRenderers() expects, from what viewer-details.js's task result
+ * already gives the client (mime, isTextual) plus the entry's own name.
+ * Pure — no I/O, mirrors exactly what viewer-details.js/
+ * file-handler-detect.js already established: isTextual IS fileMode
+ * (true -> "text", false -> "binary"), never a separate derivation.
+ *
+ * @param {'single'|'multi'} selectionType
+ * @param {boolean}     isTextual — from viewer-details.js's result
+ * @param {string|null} mime      — from viewer-details.js's result
+ * @param {string}      name      — the entry's basename, for its extension
+ * @returns {{selectionType, fileMode: 'text'|'binary', binaryCategory: string|null, fileType: string|null}}
+ */
+function viewerRendererClassification(selectionType, isTextual, mime, name) {
+  const fileMode = isTextual ? 'text' : 'binary';
+  const binaryCategory = fileMode === 'binary' ? classifyMime(mime, isTextual) : null;
+  const ext = extOf(name); // '.png', or '' if none
+  const fileType = ext ? ext.slice(1) : null;
+  return { selectionType, fileMode, binaryCategory, fileType };
+}
+
+/**
+ * Reorder matchRenderers()'s own `tabs` output for on-screen display: the
+ * base (generic) renderer first, everything else after, in matchRenderers'
+ * own relative order. matchRenderers itself puts rung-1/2 matches first
+ * and the base last (see its own header comment) — that's the right
+ * internal priority order for CHOOSING a preselection, but the opposite
+ * of how the tabs should read left-to-right (complimentary tab first,
+ * most specific rightmost — see the F3 design discussion), so this is a
+ * display-only reordering, never re-deciding which tab is preselected.
+ *
+ * @param {object[]} tabs — matchRenderers() result's own `tabs` array
+ * @returns {object[]} same renderer objects, reordered
+ */
+function orderRendererTabsForDisplay(tabs) {
+  const isBase = (r) => {
+    const a = (r && r.abilities) || {};
+    const ft = a.file_type;
+    const hasFileType = Array.isArray(ft) ? ft.length > 0 : !!ft;
+    return !hasFileType && !a.binary_category;
+  };
+  const base = tabs.filter(isBase);
+  const specific = tabs.filter(r => !isBase(r));
+  return [...base, ...specific];
+}
+
+/**
+ * The one pair of renderers with genuine runtime ambiguity: filmstrip's
+ * and waveform's renderer.json file_type lists are disjoint (video vs.
+ * audio extensions), so extension-based matching only ever preselects
+ * ONE of them — but media-extractor decides video-vs-audio itself, via
+ * ffprobe, and can disagree with that extension-based guess (its own
+ * README documents e.g. an audio-only .m4a vs. a video .mp4 being
+ * indistinguishable by container alone). Matched by tab NAME rather than
+ * uid deliberately — these two names are fixed, known constants this
+ * project chose itself, simpler and more readable at the call site than
+ * threading both real uids through just for this one lookup.
+ *
+ * @param {string} name — a renderer's display name
+ * @returns {'Filmstrip'|'Waveform'|null} the sibling name, or null if
+ *   `name` isn't one of this pair at all
+ */
+function siblingMediaRendererName(name) {
+  if (name === 'Filmstrip') return 'Waveform';
+  if (name === 'Waveform') return 'Filmstrip';
+  return null;
+}
+
+/**
+ * Compose the full HTML document set as an F3 Viewer iframe's `srcdoc` —
+ * the CSP-enforcing shell described in the sandboxed-iframe architecture
+ * discussion. The extractor's own output is a body-only fragment (never
+ * a complete document) and carries no CSP of its own; composing the
+ * shell around it is deliberately the parent's job, done here, once, in
+ * the one place an iframe's srcdoc actually gets set — never inside an
+ * extractor or a worker task. Pure string building, no DOM.
+ *
+ * `allow-same-origin` must NEVER be added to the iframe's own `sandbox`
+ * attribute wherever this is used — that's a caller-side HTML-attribute
+ * concern, not something this function can enforce, but it's the other
+ * half of the safety story this shell only makes sense alongside.
+ *
+ * `textStyle`, if given, is emitted as a `body { ... }` rule so the
+ * iframe's own text visually matches whatever's currently on screen
+ * elsewhere in the Viewer, rather than falling back to the browser's own
+ * (theme-unaware) default text color and font — the exact mismatch that
+ * produced unreadable dark-on-dark text before this existed. Deliberately
+ * NOT computed in here: this module stays pure/DOM-free by design, so the
+ * caller is responsible for obtaining these values (e.g. via
+ * getComputedStyle() on an already-live reference element) and passing
+ * them in as plain strings. A missing/null textStyle just omits the
+ * style block — extractor output still renders, using browser defaults,
+ * same as before this existed.
+ *
+ * @param {string} bodyHtml — the extractor's own HTML output, verbatim
+ * @param {{color:string, fontFamily:string, fontSize:string}} [textStyle]
+ * @returns {string} a complete HTML document string, ready for `srcdoc`
+ */
+function composeIframeDocument(bodyHtml, textStyle) {
+  const style = (textStyle && textStyle.color && textStyle.fontFamily && textStyle.fontSize)
+    ? `<style>body{color:${textStyle.color};font-family:${textStyle.fontFamily};font-size:${textStyle.fontSize};}</style>`
+    : '';
+  return (
+    '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+    '<meta http-equiv="Content-Security-Policy" content="' +
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:;" +
+    '">' + style + '</head><body>' + (bodyHtml || '') + '</body></html>'
+  );
+}
+
 // ─── Exports (CommonJS for tests, also assigned to window for browser use) ───
 
 const uiState = {
@@ -1022,6 +1133,10 @@ const uiState = {
   describeViewerSelection,
   viewerKindLabel,
   viewerPermissionGrid,
+  viewerRendererClassification,
+  orderRendererTabsForDisplay,
+  siblingMediaRendererName,
+  composeIframeDocument,
 };
 
 // Always expose as a browser global when running in a browser context.

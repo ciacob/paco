@@ -1,0 +1,11 @@
+{
+  "name": "Thumbnail",
+  "description": "Renders a bounded single-format thumbnail via image-extractor. Covers image-extractor's supported formats that file-type detects a real image/* MIME signature for — confirmed empirically for jpeg/png/webp/avif/tiff/gif via real sharp-encoded fixtures; heic/heif/psd are not independently verified in this environment (no real sample bytes available) but rely on their IANA-registered image/* MIME types, which file-type is built to recognise. See thumbnail-svg/renderer.json for the one exception in this extractor's own list: SVG, which file-type detects as generic application/xml rather than an image/* MIME — still binary_category \"other\" rather than \"image\", pairing with Raw binary the same as the rest of this list, just via a separate rung-1 file_type match rather than sharing this manifest's array (an application/xml-mimed file needs its own binary_category to stay accurate, even though the array match would have worked identically for matching purposes).",
+  "uid": "17fddfa0-3196-4c83-908e-6898722892b1",
+  "abilities": {
+    "selection_type": "single",
+    "file_mode": "binary",
+    "binary_category": "image",
+    "file_type": ["jpeg", "jpg", "png", "webp", "avif", "tiff", "tif", "gif", "heic", "heif", "psd"]
+  }
+}

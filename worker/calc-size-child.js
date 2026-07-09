@@ -20,10 +20,28 @@
  * Sends exactly one message before exiting:
  *   { ok: true,  bytes: number }
  *   { ok: false, error: string }
+ *
+ * IMPORTANT: see worker/extract-preview-child.js's header comment on why
+ * process.send() must never be immediately followed by process.exit() —
+ * the same race applies here (a large enough result, or an unlucky
+ * scheduling window, can drop the message with the child still exiting
+ * cleanly). sendThenExit() below closes it the same way.
  */
 
 const fs   = require('fs');
 const path = require('path');
+
+/**
+ * @param {object} message
+ * @param {number} code
+ */
+function sendThenExit(message, code) {
+  if (!process.send) {
+    process.exit(code);
+    return;
+  }
+  process.send(message, () => process.exit(code));
+}
 
 async function sizeOf(targetPath) {
   let stat;
@@ -64,8 +82,7 @@ async function main() {
     targetPaths = JSON.parse(rawArg);
     if (!Array.isArray(targetPaths)) throw new Error('not an array');
   } catch (_) {
-    if (process.send) process.send({ ok: false, error: 'Invalid arguments to calc-size-child' });
-    process.exit(1);
+    sendThenExit({ ok: false, error: 'Invalid arguments to calc-size-child' }, 1);
     return;
   }
 
@@ -74,11 +91,10 @@ async function main() {
     for (const p of targetPaths) {
       bytes += await sizeOf(p);
     }
-    if (process.send) process.send({ ok: true, bytes });
+    sendThenExit({ ok: true, bytes }, 0);
   } catch (err) {
-    if (process.send) process.send({ ok: false, error: err.message });
+    sendThenExit({ ok: false, error: err.message }, 0);
   }
-  process.exit(0);
 }
 
 main();

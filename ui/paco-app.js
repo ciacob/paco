@@ -19,6 +19,16 @@
 
   // ─── App state (single mutable object) ───────────────────────────────────────
 
+  // F3 Viewer "View as:" renderer registry — fetched once at boot from
+  // GET /renderers (see server/server-process.js), cached here for
+  // matchRenderers to consume on every column render. null until the
+  // fetch resolves; renderViewer()'s extraction-block rendering treats
+  // that the same as "nothing matched" (no tab row, no iframe) rather
+  // than blocking on it — the fetch is fast and local, so in practice
+  // this is only ever null for the first instant after page load, before
+  // any selection could plausibly exist yet.
+  let _rendererRegistry = null;
+
   let appState = S.makeAppState();
 
   // Selection is kept as a Set in the UI for O(1) lookup; ui-state uses arrays.
@@ -470,6 +480,58 @@
   // Shape on failure:    { signature, status: 'error' }
   const _calcState = { left: null, right: null };
 
+  // Per-side F3 "View as:" tab-row + iframe state. Keyed by path (like
+  // _viewerDetailsCache, not by a paths-signature like _calcState, since
+  // this only ever applies to a single-selection column).
+  //
+  // Shape while idle (nothing selected, or details not loaded yet): null
+  // Shape once details are available:
+  // {
+  //   path: string,
+  //   baseTab:      { uid, name },       // always present — the generic-extractor tab
+  //   specificTab:  { uid, name } | null,// the matched specific renderer, if any
+  //   isAmbiguousMedia: boolean,         // true only for the filmstrip/waveform pair
+  //   siblingRenderer:  { uid, name } | null, // specificTab's sibling, only when isAmbiguousMedia
+  //   revealedName: string | null,       // which specific tab NAME to show, if any —
+  //                                      // immediately === specificTab.name normally;
+  //                                      // null until confirmed when isAmbiguousMedia
+  //   activeUid: string,                // uid of the job currently tracked/shown —
+  //                                      // always set (even mid-ambiguity, using the
+  //                                      // guessed uid — see _startExtract's own comment)
+  //   byUid: { [uid]: { status: 'running'|'done'|'error', jobId, html, kind } }
+  // }
+  const _extractState = { left: null, right: null };
+
+  /**
+   * Pure-ish (reads only the already-cached _rendererRegistry, no I/O):
+   * given a single-selection entry and its (already-fetched)
+   * viewer-details, decide which renderers apply. Returns null if the
+   * registry hasn't loaded yet, or if somehow nothing matched at all (the
+   * base-per-file_mode invariant registry.js enforces server-side means
+   * this shouldn't happen in practice).
+   */
+  function _computeExtractionPlan(entry, details) {
+    if (!_rendererRegistry) return null;
+    const classification = S.viewerRendererClassification('single', details.isTextual, details.mime, entry.name);
+    const match = window.rendererMatcher.matchRenderers(classification, _rendererRegistry);
+    if (!match.preselected) return null;
+
+    const ordered = S.orderRendererTabsForDisplay(match.tabs); // [base] or [base, specific]
+    const baseTab = ordered[0];
+    const specificTab = ordered[1] || null;
+    const siblingName = specificTab ? S.siblingMediaRendererName(specificTab.name) : null;
+    const siblingRenderer = siblingName
+      ? _rendererRegistry.find(r => r.name === siblingName) || null
+      : null;
+
+    return {
+      baseTab: { uid: baseTab.uid, name: baseTab.name },
+      specificTab: specificTab ? { uid: specificTab.uid, name: specificTab.name } : null,
+      isAmbiguousMedia: !!siblingName,
+      siblingRenderer: siblingRenderer ? { uid: siblingRenderer.uid, name: siblingRenderer.name } : null,
+    };
+  }
+
   /**
    * Build a stable identity string for a set of paths, so the calc cache
    * can tell "is this still about the same selection" across re-renders.
@@ -513,18 +575,13 @@
     // adapter.assign()'s own resolved value is just a generic REST
     // acknowledgment ({accepted:true}) — the task's actual ctx.done()
     // result (the calcId we need) only arrives later via the WS done
-    // event, same _resultResolve round-trip pattern as every other
-    // "I need this task's real result" case elsewhere in this file.
-    adapter.assign('worker/tasks/calc-size.js', { panel: side, paths }).catch(err => {
-      if (appState._calcStartResolve) {
-        const resolve = appState._calcStartResolve;
-        appState = { ...appState, _calcStartResolve: null };
-        resolve({ ok: false, error: err.message });
-      }
-    });
-
-    const outcome = await new Promise(resolve => {
-      appState = { ...appState, _calcStartResolve: resolve };
+    // event, handled by _assignAndAwaitResult's shared queue (see its own
+    // header comment for why this can no longer use a private resolver
+    // slot of its own).
+    const outcome = await _assignAndAwaitResult('worker/tasks/calc-size.js', {
+      panel: side,
+      paths,
+      timeoutMs: appState.config.calcTimeoutMs,
     });
 
     // Only apply if this is still the calculation we're tracking for this
@@ -570,6 +627,334 @@
   }
 
   /**
+   * Single global serialization for "assign a task, then wait for its own
+   * immediate ctx.done()/ctx.fail() result" round trips. This replaces
+   * what used to be FOUR independent single-slot mechanisms (F3 viewer-
+   * details fetch, F3 calc-size start, F3 extract-preview start, F4 "Open
+   * with…") — each one serialized ITSELF against its own repeated calls,
+   * but nothing stopped two DIFFERENT mechanisms from having a round trip
+   * in flight at the same time, even though the underlying worker can
+   * only run one task at a time.
+   *
+   * That gap is exactly what a real user session reproduced: the WS
+   * 'done'/'error' events carry no correlation id back to which specific
+   * assign() call they belong to — the old code just checked whichever of
+   * the four separate resolver slots happened to still be set, in a fixed
+   * priority order, and resolved it with whatever result had actually
+   * just arrived. When two were in flight together, one request's real
+   * result got misattributed to a completely different waiting caller,
+   * permanently starving the ACTUAL matching caller of its own outcome —
+   * concretely, an extraction's immediate { jobId } response went to
+   * viewer-details' resolver instead, so the extraction's own byUid entry
+   * never learned its real jobId, and its eventual real result (arriving
+   * later over the separate extract-result channel) could never be
+   * matched to anything and was silently discarded as stale forever.
+   *
+   * Routing all four through this single queue means at most one such
+   * round trip is ever in flight system-wide, so there is never more than
+   * one candidate resolver to pick from — no correlation id is even
+   * needed, because ambiguity can't arise in the first place.
+   *
+   * A second, related race surfaced once this was in place and traced via
+   * full wire-level logging (see adapter.js's assign()/WS instrumentation):
+   * see _drainTaskResultQueue's own comment for why the resolver must be
+   * registered BEFORE calling adapter.assign(), not after.
+   */
+  let _taskResultInFlight = false;
+  const _taskResultPending = []; // [{ modulePath, config, resolve }, ...] FIFO
+
+  /**
+   * @param {string} modulePath
+   * @param {object} config
+   * @returns {Promise<{ok:boolean, result?:any, error?:string}>}
+   */
+  function _assignAndAwaitResult(modulePath, config) {
+    return new Promise((resolve) => {
+      _taskResultPending.push({ modulePath, config, resolve });
+      _drainTaskResultQueue();
+    });
+  }
+
+  function _drainTaskResultQueue() {
+    if (_taskResultInFlight) return; // will drain the next one itself when it settles
+    const next = _taskResultPending.shift();
+    if (!next) return;
+
+    _taskResultInFlight = true;
+
+    // CRITICAL ORDERING: the resolver is registered BEFORE calling
+    // adapter.assign(), not after awaiting its own HTTP response. A real
+    // user session proved why this matters: the server can push the
+    // actual 'done' WS event over the already-open WebSocket FASTER than
+    // the HTTP POST's own response travels back for these near-instant
+    // tasks (viewer-details/calc-size/extract-preview all typically
+    // finish in low single-digit milliseconds). Registering the resolver
+    // only after `await adapter.assign(...)` resolved created a real,
+    // reproducible window where the genuine 'done' event arrived while
+    // NOTHING was listening yet — logged as "nothing consumed this
+    // result" — and the resolver got wired up a moment later, by which
+    // point nothing would ever call it except some unrelated LATER
+    // task's own 'done' event, which is exactly the cross-request
+    // misattribution this whole mechanism exists to prevent. Registering
+    // synchronously, before the assign is even sent, closes that window
+    // entirely — whichever of (WS push, HTTP response) arrives first,
+    // the resolver is already there to catch the WS one.
+    appState = {
+      ...appState,
+      _taskResultResolve: (outcome) => {
+        _taskResultInFlight = false;
+        next.resolve(outcome);
+        _drainTaskResultQueue();
+      },
+    };
+
+    adapter.assign(next.modulePath, next.config).catch(err => {
+      // The assign() call itself failed outright (e.g. a network error) —
+      // resolve directly rather than waiting for a WS event that will
+      // never arrive for a request that was never actually sent/accepted.
+      // Guard against our own resolver having ALREADY been consumed by a
+      // stray WS event in the meantime (shouldn't happen if the request
+      // truly never reached the server, but cheap to check).
+      if (appState._taskResultResolve) {
+        appState = { ...appState, _taskResultResolve: null };
+        _taskResultInFlight = false;
+        next.resolve({ ok: false, error: err.message });
+        _drainTaskResultQueue();
+      }
+    });
+  }
+
+  /**
+   * Extraction request queue — dedup only, NOT the assign-and-await
+   * serialization itself (that's _assignAndAwaitResult's job now): both
+   * panels can independently need an extraction started in the very same
+   * render pass (a single-selection column on each side), and only the
+   * LATEST request for a given side is worth running — an older queued
+   * one would just be wasted work if e.g. the user switched tabs again
+   * before it even started. Deliberately a SEPARATE dedup queue from
+   * _viewerDetailsPending: the two are unrelated task kinds, and "only
+   * the latest wins" for one shouldn't drop a still-relevant request from
+   * the other. Both ultimately funnel into the same
+   * _assignAndAwaitResult/_taskResultPending queue above, one at a time.
+   */
+  let _extractInFlight = false;
+  const _extractPending = []; // [{ side, path, uid }, ...], FIFO
+
+  /**
+   * Public entry point: request that extraction start for a specific
+   * renderer uid, for a single-selection column's current file. Enqueues
+   * rather than firing directly — see _extractInFlight/_extractPending
+   * above. Deduplicates against whatever's already queued for the same
+   * side (only the latest request for a side is worth running; an older
+   * queued one would just be wasted work if e.g. the user switched tabs
+   * again before it even started).
+   */
+  function _fetchExtract(side, path, uid) {
+    console.log('[PACO extract] _fetchExtract enqueue', { side, path, uid });
+    for (let i = _extractPending.length - 1; i >= 0; i--) {
+      if (_extractPending[i].side === side) _extractPending.splice(i, 1);
+    }
+    _extractPending.push({ side, path, uid });
+    _drainExtractQueue();
+  }
+
+  function _drainExtractQueue() {
+    if (_extractInFlight) { console.log('[PACO extract] _drainExtractQueue: already in flight, will drain later'); return; }
+    if (appState.busy) { console.log('[PACO extract] _drainExtractQueue: appState.busy, deferring'); return; }
+    const next = _extractPending.shift();
+    if (!next) return;
+
+    console.log('[PACO extract] _drainExtractQueue: starting', next);
+    _extractInFlight = true;
+    _runExtractFetch(next.side, next.path, next.uid).finally(() => {
+      _extractInFlight = false;
+      _drainExtractQueue();
+    });
+  }
+
+  /**
+   * Start (or restart) extraction for a specific renderer uid on the
+   * given side. Marks byUid[uid] running immediately (synchronously, from
+   * _fetchExtract's caller, before this async function's own await even
+   * starts) so the spinner shows right away — see the callers below.
+   *
+   * For the ambiguous-media case, `uid` is deliberately the ORIGINALLY
+   * GUESSED renderer's uid (filmstrip's or waveform's, whichever
+   * extension-matching preselected) even though the visible tab hasn't
+   * been revealed yet — filmstrip's and waveform's glue.js are the exact
+   * same shared implementation (see paco/renderers/_shared/media-glue.js),
+   * so the guessed uid resolves to an identical extraction call either
+   * way; the result's own `kind` field is what actually decides which tab
+   * gets revealed once it arrives (_handleExtractResult below), not which
+   * uid was submitted.
+   */
+  async function _runExtractFetch(side, path, uid) {
+    console.log('[PACO extract] _runExtractFetch: assigning', { side, path, uid });
+    const outcome = await _assignAndAwaitResult('worker/tasks/extract-preview.js', {
+      panel: side,
+      path,
+      uid,
+      timeoutMs: appState.config.extractionTimeoutMs,
+    });
+    console.log('[PACO extract] _runExtractFetch: outcome received', { side, path, uid, outcome });
+
+    // Only apply if this is still the same file AND the same job we
+    // started — a selection change or a tab switch may have replaced
+    // this entry's byUid[uid] wholesale (or the whole state object)
+    // during the round-trip.
+    const current = _extractState[side];
+    if (!current || current.path !== path) {
+      console.log('[PACO extract] _runExtractFetch: state moved on, discarding outcome', {
+        side, expectedPath: path, currentPath: current && current.path,
+      });
+      return;
+    }
+    const job = current.byUid[uid];
+    if (!job || job.status !== 'running') {
+      console.log('[PACO extract] _runExtractFetch: byUid entry no longer running, discarding outcome', { side, path, uid, job });
+      return;
+    }
+
+    if (!outcome || !outcome.ok || !outcome.result || !outcome.result.jobId) {
+      const errText = (outcome && outcome.error) || 'Could not start the preview';
+      console.log('[PACO extract] _runExtractFetch: assign did not yield a jobId, marking error', { side, path, uid, errText });
+      current.byUid[uid] = { status: 'error', jobId: null, html: null, kind: null, error: errText };
+      renderViewer();
+      return;
+    }
+
+    console.log('[PACO extract] _runExtractFetch: got real jobId, now tracking it', { side, path, uid, jobId: outcome.result.jobId });
+    current.byUid[uid] = { status: 'running', jobId: outcome.result.jobId, html: null, kind: null, error: null };
+  }
+
+  /**
+   * Synchronous half of starting an extraction: marks byUid[uid] running,
+   * then hands off to the queue for the actual HTTP round-trip. Safe to
+   * call unconditionally — a no-op if this exact (path, uid) is already
+   * running or already done.
+   *
+   * Deliberately does NOT call renderViewer() itself, even though it
+   * mutates state that affects what gets rendered — this function is
+   * called from two places, and both already have their own render call
+   * that picks up the mutation correctly:
+   *   1. _renderViewerExtraction's auto-start path calls this SYNCHRONOUSLY
+   *      from partway through an already-in-progress renderViewer() call.
+   *      Calling renderViewer() again here would be genuine re-entrancy —
+   *      the nested call clears and rebuilds dom.viewerContent while the
+   *      OUTER call is still mid-loop, and when the outer call later does
+   *      its own dom.viewerContent.appendChild(wrap), it appends on top of
+   *      the nested call's already-appended content instead of replacing
+   *      it — this is exactly the "several stacked panel-selection
+   *      sections" a real user session's screenshot showed. The mutation
+   *      below happens before the enclosing render's own DOM-building code
+   *      reads state.byUid, so that outer render already reflects
+   *      'running' correctly with no extra call needed.
+   *   2. The tab-click handler calls this, then calls renderViewer()
+   *      itself right after — calling it here too would just be redundant.
+   */
+  function _startExtract(side, path, uid) {
+    const state = _extractState[side];
+    if (!state || state.path !== path) {
+      console.log('[PACO extract] _startExtract: no-op, state moved on already', { side, path, uid, statePath: state && state.path });
+      return;
+    }
+    if (state.byUid[uid] && state.byUid[uid].status !== 'error') {
+      console.log('[PACO extract] _startExtract: no-op, already running/done', { side, path, uid, existing: state.byUid[uid] });
+      return;
+    }
+
+    console.log('[PACO extract] _startExtract: starting', { side, path, uid });
+    state.byUid[uid] = { status: 'running', jobId: null, html: null, kind: null, error: null };
+    _fetchExtract(side, path, uid);
+  }
+
+  /**
+   * Fire-and-forget cancel for whichever extraction job is currently
+   * running on the given side, if any — same reasoning as
+   * _cancelCalcIfRunning: triggered on selection change AND on tab switch,
+   * no result awaited, a stray late result is simply discarded by
+   * _handleExtractResult's own jobId check.
+   */
+  function _cancelExtractIfRunning(side) {
+    const state = _extractState[side];
+    if (!state) { console.log('[PACO extract] _cancelExtractIfRunning: nothing tracked for side', side); return; }
+    let cancelledAny = false;
+    for (const uid of Object.keys(state.byUid)) {
+      const job = state.byUid[uid];
+      if (job.status === 'running' && job.jobId) {
+        cancelledAny = true;
+        console.log('[PACO extract] _cancelExtractIfRunning: cancelling', { side, uid, jobId: job.jobId, forPath: state.path });
+        adapter.assign('worker/tasks/cancel-extract.js', { jobId: job.jobId }).catch(() => {});
+      }
+    }
+    if (!cancelledAny) console.log('[PACO extract] _cancelExtractIfRunning: nothing currently running to cancel', { side, forPath: state.path, byUid: state.byUid });
+  }
+
+  /**
+   * Handle the extract-result WS notification — arrives at any arbitrary
+   * later time, fully decoupled from the worker's own state machine, same
+   * as _handleCalcResult. Discards silently if no side is currently
+   * tracking this exact jobId (stale: selection changed, tab switched
+   * away and back, Viewer closed/reopened, or the small race window after
+   * an explicit cancel).
+   */
+  function _handleExtractResult(jobId, panel, result) {
+    const side = panel === 'right' ? 'right' : 'left';
+    const state = _extractState[side];
+    if (!state) {
+      console.log('[PACO extract] _handleExtractResult: STALE — no state tracked at all for side', { side, jobId });
+      return;
+    }
+
+    const uid = Object.keys(state.byUid).find(u => state.byUid[u].jobId === jobId);
+    if (!uid) {
+      console.log('[PACO extract] _handleExtractResult: STALE — jobId not found in current byUid, discarding', {
+        side, jobId, statePath: state.path, currentByUid: state.byUid,
+      });
+      return; // stale — discard
+    }
+
+    console.log('[PACO extract] _handleExtractResult: MATCHED', { side, jobId, uid, ok: result && result.ok, statePath: state.path });
+
+    if (result && result.ok) {
+      state.byUid[uid] = { status: 'done', jobId, html: result.html, kind: result.kind || null, error: null };
+
+      // Ambiguous-media reveal: only meaningful the first time the
+      // originally-guessed uid's result comes back, while nothing has
+      // been revealed yet.
+      if (state.isAmbiguousMedia && state.revealedName === null && uid === state.activeUid) {
+        const confirmedName = result.kind === 'video' ? 'Filmstrip'
+          : result.kind === 'audio' ? 'Waveform'
+          : null;
+        if (confirmedName && confirmedName !== state.specificTab.name) {
+          // Guessed wrong — the sibling was the correct one all along.
+          // Same html/kind already fetched serves both; just relabel
+          // which uid/name is considered "the specific tab" from here on.
+          state.activeUid = state.siblingRenderer.uid;
+          state.byUid[state.siblingRenderer.uid] = state.byUid[uid];
+          state.specificTab = state.siblingRenderer;
+        }
+        state.revealedName = state.specificTab.name;
+      }
+    } else {
+      // Pass the extractor's/task's own error text through as-is (e.g. a
+      // timeout message, an "unsupported format" from the extractor
+      // itself, or a real decode error) rather than collapsing it to a
+      // generic message — see _renderViewerExtractionBody for how this
+      // gets displayed.
+      const errText = (result && result.error) || 'Unknown error';
+      state.byUid[uid] = { status: 'error', jobId, html: null, kind: null, error: errText };
+      if (state.isAmbiguousMedia && state.revealedName === null && uid === state.activeUid) {
+        // Even a failed extraction ends the "pending, nothing shown yet"
+        // window — reveal the originally-guessed tab so the error has
+        // somewhere to display, rather than showing nothing forever.
+        state.revealedName = state.specificTab.name;
+      }
+    }
+    renderViewer();
+  }
+
+  /**
    * Re-render the Viewer panel's content area from both panels' current
    * selection. Safe to call unconditionally (e.g. from every selection
    * mutation site) — it's a no-op render into a hidden panel if the Viewer
@@ -607,15 +992,45 @@
     const wrap = document.createElement('div');
     wrap.id = 'viewer-columns';
 
+    // First pass: build and attach each column's "Selection Details"
+    // table (via _renderViewerColumn/_renderViewerSingle, which no longer
+    // build the "View as" extraction block themselves — see below).
+    const infoElsBySide = {};
     for (const col of desc.columns) {
-      wrap.appendChild(_renderViewerColumn(col));
+      const { columnEl, infoEl } = _renderViewerColumn(col);
+      wrap.appendChild(columnEl);
+      infoElsBySide[col.side] = infoEl;
     }
     dom.viewerContent.appendChild(wrap);
+    // Details tables are now genuinely attached to the live document —
+    // required before the second pass below, since getComputedStyle()
+    // on a not-yet-attached node returns unresolved initial values, not
+    // the real cascaded ones (confirmed: the table was previously built
+    // as a detached fragment right alongside the extraction block, in
+    // the same pass, before either was ever inserted anywhere).
+
+    // Second pass: for any single-selection FILE column whose
+    // viewer-details have already arrived, build and append the "View
+    // as" tabs + iframe block — now that this side's own Details table
+    // is live, sample its actual computed text color/font so the
+    // iframe's own text can match it exactly, instead of drifting out of
+    // sync with a separately-hardcoded value or falling back to the
+    // browser's own theme-unaware defaults (the original dark-on-dark
+    // text bug).
+    for (const col of desc.columns) {
+      if (col.kind !== 'single' || col.entry.type !== 'file') continue;
+      const cachedDetails = _viewerDetailsCache[col.side];
+      const details = (cachedDetails && cachedDetails.path === col.entry.path) ? cachedDetails.details : null;
+      if (!details) continue;
+      const textStyle = _sampleDetailsTextStyle(infoElsBySide[col.side]);
+      infoElsBySide[col.side].appendChild(_renderViewerExtraction(col.side, col.entry, details, textStyle));
+    }
 
     // Content height can change with every render independent of any
     // divider drag (e.g. a multi-selection table is taller than a
-    // single-item one) — re-check fit now that the new content is in
-    // the live DOM and its real height can be measured.
+    // single-item one) — re-check fit now that ALL of this render's
+    // content (including the second pass above) is in the live DOM and
+    // its real height can be measured.
     _applyViewerFit();
 
     // Drop any cached enrichment for a side that no longer has a (matching)
@@ -646,6 +1061,24 @@
       if (cached && cached.signature !== wantsSignature) {
         if (cached.status === 'running') _cancelCalcIfRunning(side);
         _calcState[side] = null;
+      }
+    }
+
+    // Same idea for F3 iframe extraction state — clears/cancels when the
+    // selection no longer matches a single-selection FILE (folders, multi-
+    // selection, and "nothing selected" never get the "View as:" feature
+    // at all). Actual (re)initialization for a newly-matching file happens
+    // inside _renderViewerSingle/_renderViewerExtraction, which guards
+    // against staleness the same inline way _viewerDetailsCache's own
+    // consumer above does — this loop is cleanup or a stale in-flight job,
+    // not a correctness requirement for the render that just happened.
+    for (const side of ['left', 'right']) {
+      const col = desc.columns.find(c => c.side === side);
+      const wantsPath = (col && col.kind === 'single' && col.entry.type === 'file') ? col.entry.path : null;
+      const cached = _extractState[side];
+      if (!wantsPath || (cached && cached.path !== wantsPath)) {
+        if (cached) _cancelExtractIfRunning(side);
+        _extractState[side] = null;
       }
     }
 
@@ -700,20 +1133,7 @@
   }
 
   async function _runViewerDetailsFetch(side, targetPath) {
-    try {
-      await adapter.assign('worker/tasks/viewer-details.js', { path: targetPath });
-    } catch (err) {
-      if (appState._viewerDetailsResolve) {
-        const resolve = appState._viewerDetailsResolve;
-        appState = { ...appState, _viewerDetailsResolve: null };
-        resolve({ ok: false, error: err.message });
-      }
-      return;
-    }
-
-    const outcome = await new Promise(resolve => {
-      appState = { ...appState, _viewerDetailsResolve: resolve };
-    });
+    const outcome = await _assignAndAwaitResult('worker/tasks/viewer-details.js', { path: targetPath });
 
     if (!outcome.ok) return; // silently skip enrichment on failure, per design
 
@@ -726,6 +1146,15 @@
     renderViewer();
   }
 
+  /**
+   * Builds a column's outer wrapper + "Selection Details" content only —
+   * the "View as" tabs/iframe block is deliberately NOT built here; see
+   * renderViewer()'s own two-pass comment for why that has to happen
+   * later, once this column's own table is actually live.
+   *
+   * @returns {{ columnEl: HTMLElement, infoEl: HTMLElement }} — infoEl is
+   *   where the second pass will append the extraction block, once ready.
+   */
   function _renderViewerColumn(col) {
     const column = document.createElement('div');
     column.className = 'viewer-column';
@@ -745,7 +1174,28 @@
     }
 
     column.appendChild(info);
-    return column;
+    return { columnEl: column, infoEl: info };
+  }
+
+  /**
+   * Sample the ALREADY-LIVE "Selection Details" table's real computed
+   * text styling (color, font-family, font-size) for a given column, so
+   * the F3 "View as" iframe's own text can match it exactly rather than
+   * drifting out of sync with a separately-hardcoded value, or falling
+   * back to the browser's own theme-unaware defaults. Must only be
+   * called once infoEl's table is genuinely attached to the live
+   * document — getComputedStyle() on a detached node returns unresolved
+   * initial values, not the real cascaded ones. Returns null if no such
+   * table/cell is found (shouldn't happen given the two-pass render
+   * order in renderViewer(), but degrades gracefully — the iframe just
+   * renders with browser defaults, same as before this existed — rather
+   * than throwing if it somehow does).
+   */
+  function _sampleDetailsTextStyle(infoEl) {
+    const td = infoEl && infoEl.querySelector('.viewer-table td');
+    if (!td) return null;
+    const cs = getComputedStyle(td);
+    return { color: cs.color, fontFamily: cs.fontFamily, fontSize: cs.fontSize };
   }
 
   function _kv(label, value, rowClass) {
@@ -809,7 +1259,148 @@
 
     table.appendChild(tbody);
     frag.appendChild(table);
+
+    // The "View as" tabs/iframe block is deliberately NOT appended here —
+    // see renderViewer()'s two-pass comment for why it has to be built
+    // separately, after this table is live.
     return frag;
+  }
+
+  /**
+   * F3 Viewer "View as:" tab row + sandboxed iframe, for a single-
+   * selection file whose viewer-details have already arrived (the caller
+   * guards on `details` being non-null — before that, we don't yet know
+   * mime/isTextual and can't classify the file at all).
+   *
+   * (Re)initializes _extractState[side] the first time this file's path
+   * is seen, then renders purely from whatever's in that state — the
+   * actual extraction round-trips happen out-of-band via
+   * _startExtract/_fetchExtract and re-render through the normal
+   * WS-result/renderViewer() path, same architecture as the size-
+   * calculation row above.
+   */
+  function _renderViewerExtraction(side, entry, details, textStyle) {
+    const frag = document.createDocumentFragment();
+    const plan = _computeExtractionPlan(entry, details);
+    if (!plan) return frag; // registry not loaded yet, or (shouldn't happen) nothing matched at all
+
+    let state = _extractState[side];
+    if (!state || state.path !== entry.path) {
+      console.log('[PACO extract] _renderViewerExtraction: NEW FILE, replacing state', {
+        side, oldPath: state && state.path, newPath: entry.path,
+      });
+      // Cancel whatever the PREVIOUS file's extraction state was tracking
+      // before overwriting it — this must happen here, not in renderViewer()'s
+      // own later "invalidate stale cache" loop, because that loop reads
+      // _extractState[side] AFTER this function has already run (columns are
+      // rendered before invalidation checks in renderViewer()) and would
+      // therefore always see the state this function just wrote for the NEW
+      // file, never the old one — meaning the old job was never actually
+      // cancelled, just silently abandoned mid-flight on the server. Under
+      // rapid reselection, that leaves an unbounded number of orphaned,
+      // still-running extraction child processes accumulating in the
+      // background (each eventually finishing or timing out on its own, but
+      // never cleaned up early), which is exactly what a real user session
+      // reproduced: everything succeeds individually, yet something
+      // eventually degrades after enough quick reselections pile up
+      // uncancelled work.
+      if (state) _cancelExtractIfRunning(side);
+
+      const initialSpecific = plan.isAmbiguousMedia ? null : plan.specificTab;
+      state = {
+        path: entry.path,
+        baseTab: plan.baseTab,
+        specificTab: plan.specificTab,
+        isAmbiguousMedia: plan.isAmbiguousMedia,
+        siblingRenderer: plan.siblingRenderer,
+        revealedName: initialSpecific ? initialSpecific.name : null,
+        activeUid: plan.specificTab ? plan.specificTab.uid : plan.baseTab.uid,
+        byUid: {},
+      };
+      _extractState[side] = state;
+      // Kick off the preselected (rightmost) tab's extraction immediately —
+      // "you pre-populate the iframe according to the preselected tab, if
+      // applicable, or as raw text/binary, whichever applicable." Queued
+      // via _startExtract -> _fetchExtract, not fired directly, for the
+      // same both-sides-in-one-render reason as viewer-details/calc.
+      _startExtract(side, entry.path, state.activeUid);
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'viewer-extraction';
+
+    // visibleTabs: base always shown; the specific tab is shown immediately
+    // for the ordinary case, or only once state.revealedName is set for the
+    // ambiguous filmstrip/waveform pair (null until the result confirms it).
+    const visibleTabs = [state.baseTab];
+    if (state.revealedName) {
+      visibleTabs.push(state.specificTab.name === state.revealedName
+        ? state.specificTab
+        : { uid: state.activeUid, name: state.revealedName }); // defensive fallback, shouldn't diverge
+    }
+
+    if (visibleTabs.length > 1) {
+      wrap.appendChild(_renderViewerExtractionTabs(side, entry.path, state, visibleTabs));
+    }
+
+    wrap.appendChild(_renderViewerExtractionBody(state, textStyle));
+    frag.appendChild(wrap);
+    return frag;
+  }
+
+  function _renderViewerExtractionTabs(side, path, state, visibleTabs) {
+    const row = document.createElement('div');
+    row.className = 'viewer-extraction-tabs';
+
+    const label = document.createElement('span');
+    label.className = 'viewer-extraction-tabs-label';
+    label.textContent = 'View as:';
+    row.appendChild(label);
+
+    for (const tab of visibleTabs) {
+      const t = document.createElement('div');
+      t.className = 'viewer-tab' + (tab.uid === state.activeUid ? ' active' : '');
+      t.textContent = tab.name;
+      t.addEventListener('click', () => {
+        if (state.activeUid === tab.uid) return;
+        state.activeUid = tab.uid;
+        _startExtract(side, path, tab.uid); // no-op if already running/done for this uid
+        renderViewer();
+      });
+      row.appendChild(t);
+    }
+
+    return row;
+  }
+
+  function _renderViewerExtractionBody(state, textStyle) {
+    const body = document.createElement('div');
+    body.className = 'viewer-extraction-body';
+
+    const job = state.byUid[state.activeUid];
+
+    if (!job || job.status === 'running') {
+      const spinner = document.createElement('span');
+      spinner.className = 'viewer-extraction-spinner';
+      spinner.title = 'Preparing preview\u2026';
+      body.appendChild(spinner);
+      return body;
+    }
+
+    if (job.status === 'error') {
+      const err = document.createElement('span');
+      err.className = 'viewer-extraction-error';
+      err.textContent = job.error || 'Could not prepare a preview';
+      body.appendChild(err);
+      return body;
+    }
+
+    const iframe = document.createElement('iframe');
+    iframe.className = 'viewer-extraction-frame';
+    iframe.setAttribute('sandbox', 'allow-scripts'); // allow-same-origin is NEVER added — see the architecture discussion
+    iframe.srcdoc = S.composeIframeDocument(job.html, textStyle);
+    body.appendChild(iframe);
+    return body;
   }
 
   function _renderViewerPermissions(details) {
@@ -1096,31 +1687,23 @@
         resolve({ ok: true });
       }
 
-      // F4 "Open with…" completion — unlike mkdir/rename, the result payload
-      // itself matters (action: 'open'|'nativeOpen'|'lister'|'none'), so it's
-      // forwarded as-is rather than collapsed to a bare { ok: true }.
-      if (appState._openWithResolve) {
-        const resolve = appState._openWithResolve;
-        appState = { ...appState, _openWithResolve: null };
+      // Unified "assign a task, wait for its own immediate result" round
+      // trip — see _assignAndAwaitResult's own header comment for why
+      // this replaced four previously-separate resolver slots (F4 "Open
+      // with…", F3 viewer-details fetch, F3 calc-size start, F3 extract-
+      // preview start). Exactly one of these can ever be pending at a
+      // time, so there's no ambiguity about which request this "done"
+      // event belongs to — PROVIDED nothing else that also produces a
+      // "done" (navigate, copy, mkdir, ...) can steal it, which is
+      // exactly what's under active investigation; hence logging both
+      // branches explicitly rather than just the happy path.
+      if (appState._taskResultResolve) {
+        const resolve = appState._taskResultResolve;
+        appState = { ...appState, _taskResultResolve: null };
+        console.log('[PACO wire] done: _taskResultResolve FIRED with', JSON.stringify(result));
         resolve({ ok: true, result });
-      }
-
-      // F3 Viewer panel — async detail enrichment (kind label, owner,
-      // permissions) for a single-selection column. Same forward-the-
-      // result-as-is shape as F4's, since the caller needs the payload.
-      if (appState._viewerDetailsResolve) {
-        const resolve = appState._viewerDetailsResolve;
-        appState = { ...appState, _viewerDetailsResolve: null };
-        resolve({ ok: true, result });
-      }
-
-      // F3 Viewer panel — calc-size.js's immediate { calcId } result (the
-      // ACTUAL calculation result arrives later, separately, via the
-      // calc-result WS message handled in the boot-trigger switch above).
-      if (appState._calcStartResolve) {
-        const resolve = appState._calcStartResolve;
-        appState = { ...appState, _calcStartResolve: null };
-        resolve({ ok: true, result });
+      } else {
+        console.log('[PACO wire] done: _taskResultResolve was empty, nothing consumed this result', JSON.stringify(result));
       }
 
       // Continue draining watch queue if more panels need refreshing
@@ -1168,19 +1751,17 @@
             const resolve = createFileDlg._resultResolve;
             createFileDlg._resultResolve = null;
             resolve({ ok: false, error: errMsg || 'Unknown error' });
-          } else if (appState._openWithResolve) {
-            const resolve = appState._openWithResolve;
-            appState = { ...appState, _openWithResolve: null };
-            resolve({ ok: false, error: errMsg || 'Unknown error' });
-          } else if (appState._viewerDetailsResolve) {
-            const resolve = appState._viewerDetailsResolve;
-            appState = { ...appState, _viewerDetailsResolve: null };
-            resolve({ ok: false, error: errMsg || 'Unknown error' });
-          } else if (appState._calcStartResolve) {
-            const resolve = appState._calcStartResolve;
-            appState = { ...appState, _calcStartResolve: null };
+          } else if (appState._taskResultResolve) {
+            // Unified round trip — see _assignAndAwaitResult's own header
+            // comment. Same "exactly one can be pending" guarantee as the
+            // 'done' handler above, so this is unambiguously the request
+            // that just failed.
+            const resolve = appState._taskResultResolve;
+            appState = { ...appState, _taskResultResolve: null };
+            console.log('[PACO wire] error: _taskResultResolve FIRED with', errMsg);
             resolve({ ok: false, error: errMsg || 'Unknown error' });
           } else {
+            console.log('[PACO wire] error: no resolver was waiting, showing to user:', errMsg);
             showError('Error', errMsg || 'Unknown error');
           }
           adapter.reset().catch(() => {});
@@ -1218,6 +1799,12 @@
     // ── F3 Viewer: size calculation result ────────────────────────────────
     if (s === 'calc-result') {
       _handleCalcResult(ws.calcId, ws.panel, ws.result);
+      return;
+    }
+
+    // ── F3 Viewer: iframe extraction result ───────────────────────────────
+    if (s === 'extract-result') {
+      _handleExtractResult(ws.jobId, ws.panel, ws.result);
       return;
     }
 
@@ -1910,17 +2497,7 @@
     renderList(side, appState.panels[side]);
     const spinnerStartedAt = Date.now();
 
-    adapter.assign('worker/tasks/open-with.js', { path: targetPath }).catch(err => {
-      if (appState._openWithResolve) {
-        const resolve = appState._openWithResolve;
-        appState = { ...appState, _openWithResolve: null };
-        resolve({ ok: false, error: err.message });
-      }
-    });
-
-    const outcome = await new Promise(resolve => {
-      appState = { ...appState, _openWithResolve: resolve };
-    });
+    const outcome = await _assignAndAwaitResult('worker/tasks/open-with.js', { path: targetPath });
 
     // Enforce the minimum visible duration before clearing the spinner.
     const elapsed = Date.now() - spinnerStartedAt;
@@ -2451,6 +3028,19 @@
 
   dom.html.setAttribute('data-theme', appState.config.theme);
   adapter.connect();
+
+  // F3 Viewer "View as:" renderer registry — fetched once, independent of
+  // the WS boot-trigger sequence above (this has nothing to do with the
+  // worker's idle/running state machine). If the Viewer is already open
+  // and showing a single-selection column by the time this resolves
+  // (only plausible in an unusually slow-network edge case, never on a
+  // normal local boot), re-render so the tab row/iframe can appear.
+  adapter.getRenderers().then(list => {
+    _rendererRegistry = list;
+    renderViewer();
+  }).catch(err => {
+    console.warn('[PACO] could not load renderer registry — "View as:" tabs will be unavailable', err);
+  });
 
   // The WS handler will fire onStateChange with {state:'idle'} on connect,
   // which triggers nextBootAction → navigate-left → (on done) navigate-right.

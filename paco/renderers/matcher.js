@@ -166,4 +166,16 @@ function _choosePreselection(rung1, rung2, base, selection) {
   return base;
 }
 
-module.exports = { matchRenderers };
+const matcher = { matchRenderers };
+
+// Always expose as a browser global when running in a browser context —
+// same dual-export pattern as paco/ui-state.js (see that file's own
+// comment on why the typeof-window check is used over typeof-module).
+if (typeof window !== 'undefined') {
+  window.rendererMatcher = matcher;
+}
+
+// CommonJS export for Node.js (tests, tasks).
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = matcher;
+}

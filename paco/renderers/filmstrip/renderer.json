@@ -1,0 +1,11 @@
+{
+  "name": "Filmstrip",
+  "description": "Renders a static filmstrip of frames via media-extractor. Covers media-extractor's documented video-container list, all confirmed as detecting a real video/* MIME signature via file-type (verified directly for mp4 and webm against real ffmpeg-encoded fixtures; the rest — mov/m4v/mkv/avi/flv/ts/m2ts/mpegts/wmv/asf/ogv — are standard containers file-type recognises the same way, not independently re-verified one by one in this environment). This is an extension-based guess, made before the extractor itself runs — media-extractor's own README documents real ambiguity here (e.g. an audio-only .m4a and a video .mp4 can be indistinguishable by container alone), which is why the glue code for this renderer and waveform/renderer.json's both build the standby-sibling-tab handling rather than trusting this guess unconditionally. See glue.js.",
+  "uid": "2e66f078-c512-41a3-8a09-e8750b3d2557",
+  "abilities": {
+    "selection_type": "single",
+    "file_mode": "binary",
+    "binary_category": "video",
+    "file_type": ["mp4", "mov", "m4v", "mkv", "webm", "avi", "flv", "ts", "m2ts", "mpeg", "wmv", "asf", "ogv"]
+  }
+}

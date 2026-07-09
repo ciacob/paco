@@ -149,6 +149,27 @@ const DEFAULT_CONFIG = {
   // deliberately NOT persisted (see worker/tasks/save-config.js callers in
   // paco-app.js) — only the split position is, for whenever it's reopened.
   viewerSplit: 0.5,
+
+  // F3 Viewer detached-child-process timeouts — worker/tasks/extract-
+  // preview.js and worker/tasks/calc-size.js each fork a child that could,
+  // in principle, hang forever (a native decoder deadlock, a stuck ffmpeg
+  // invocation, an unread stdio pipe filling up) without ever crashing or
+  // reporting a result — nothing else would ever detect or recover from
+  // that. Deliberately two SEPARATE values, not one shared timeout:
+  //
+  //   extractionTimeoutMs — bounds a single preview render (thumbnail,
+  //   formatted-document HTML, filmstrip/waveform). These normally finish
+  //   in well under a second, occasionally longer for a large HEIC (WASM
+  //   decode) or a multi-frame video filmstrip — 30s is generous headroom
+  //   for a genuinely slow-but-working case while still catching a real hang.
+  //
+  //   calcTimeoutMs — bounds a recursive folder size sum, which can
+  //   LEGITIMATELY take minutes for a huge or network-mounted tree. Using
+  //   the short extraction timeout here would abort perfectly normal
+  //   calculations, not just genuine hangs — 5 minutes is a much longer
+  //   grace period appropriate to that very different risk profile.
+  extractionTimeoutMs: 30000,
+  calcTimeoutMs: 300000,
 };
 
 // Maximum navigation history entries kept per panel

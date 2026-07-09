@@ -37,6 +37,10 @@ const EVT = {
   // at any arbitrary later time, decoupled from whatever the worker
   // happens to be doing when it does. See worker/tasks/calc-size.js.
   CALC_RESULT:    'EVT_CALC_RESULT',    // payload: { calcId, panel, result }
+  // Same shape and same reasoning as CALC_RESULT, for the F3 iframe
+  // extraction pipeline instead of size calculation — see
+  // worker/tasks/extract-preview.js.
+  EXTRACT_RESULT: 'EVT_EXTRACT_RESULT', // payload: { jobId, panel, result }
 };
 
 // ─── Internal: server-process ↔ main ─────────────────────────────────────────
@@ -48,6 +52,8 @@ const SRV = {
   STATE_PUSH:     'SRV_STATE_PUSH',     // payload: WorkerStatus
   // main → server  (independent of STATE_PUSH — see EVT.CALC_RESULT)
   CALC_RESULT:    'SRV_CALC_RESULT',    // payload: { calcId, panel, result }
+  // main → server  (independent of STATE_PUSH — see EVT.EXTRACT_RESULT)
+  EXTRACT_RESULT: 'SRV_EXTRACT_RESULT', // payload: { jobId, panel, result }
 };
 
 // ─── Worker state machine values ─────────────────────────────────────────────

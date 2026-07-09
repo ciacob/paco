@@ -1,0 +1,11 @@
+{
+  "name": "Waveform",
+  "description": "Renders a waveform + spectrogram (and embedded cover art, if present) via media-extractor. Covers media-extractor's documented audio-format list, all confirmed as detecting a real audio/* MIME signature via file-type (verified directly for mp3, wav, flac, and m4a against real ffmpeg-encoded fixtures spanning three different container families; the rest — aiff/aif/aac/ogg/oga/wma/ape/wv/wavpack — are standard formats file-type recognises the same way, not independently re-verified one by one in this environment). Same extension-based-guess caveat as filmstrip/renderer.json applies here, symmetrically — see glue.js for how the two renderers hand off to one another once the extractor's own result confirms the actual kind.",
+  "uid": "bf39468a-00b6-4e11-b517-bef8ccb47796",
+  "abilities": {
+    "selection_type": "single",
+    "file_mode": "binary",
+    "binary_category": "audio",
+    "file_type": ["mp3", "wav", "aiff", "aif", "flac", "m4a", "aac", "ogg", "oga", "wma", "ape", "wv", "wavpack"]
+  }
+}

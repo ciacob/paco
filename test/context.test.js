@@ -202,6 +202,23 @@ describe('config', () => {
     assert.equal(cfg.viewerSplit, 0.5);
   });
 
+  test('readConfig defaults extractionTimeoutMs and calcTimeoutMs on first boot', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.extractionTimeoutMs, 30000);
+    assert.equal(cfg.calcTimeoutMs, 300000);
+  });
+
+  test('extractionTimeoutMs and calcTimeoutMs are independently overridable via updateConfig', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    ctx.updateConfig({ extractionTimeoutMs: 5000 });
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.extractionTimeoutMs, 5000);
+    assert.equal(cfg.calcTimeoutMs, 300000); // unchanged default
+  });
+
   test('writeConfig persists values', () => {
     const ctx = freshContext();
     ctx.bootstrap();

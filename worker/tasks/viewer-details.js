@@ -24,6 +24,14 @@
  * Result:
  *   {
  *     kindLabel: string|null,   // e.g. "text — text/html file"; null for folders
+ *     mime: string|null,        // raw detected MIME (files only), null for folders
+ *                               // or when file-type found no signature match
+ *     isTextual: boolean|null,  // raw content-sniff result (files only), null for folders.
+ *                               // Exposed alongside kindLabel (which already encodes this)
+ *                               // so the client can feed paco/renderers/matcher.js's
+ *                               // classifyMime()/matchRenderers() directly, without
+ *                               // parsing a human-readable label string back apart or
+ *                               // running a second detectMime()/detectIsTextual() round-trip.
  *     owner: string|null,       // POSIX username, or null on Windows
  *     octal: string|null,       // e.g. "644"; null on Windows
  *     isReadOnly: boolean,      // meaningful on Windows only
@@ -55,10 +63,12 @@ module.exports = {
     const details = await provider.statDetails(targetPath);
 
     let kindLabel = null;
+    let mime = null;
+    let isTextual = null;
     if (entry.type === 'file') {
-      const mime = await detect.detectMime(targetPath);
-      const looksTextual = mime ? false : await detect.detectIsTextual(targetPath);
-      kindLabel = uiState.viewerKindLabel(looksTextual, mime, path.extname(targetPath));
+      mime = await detect.detectMime(targetPath);
+      isTextual = mime ? false : await detect.detectIsTextual(targetPath);
+      kindLabel = uiState.viewerKindLabel(isTextual, mime, path.extname(targetPath));
     }
 
     const permissionGrid = (details && process.platform !== 'win32')
@@ -68,6 +78,8 @@ module.exports = {
     ctx.progress(100, 'Done');
     ctx.done({
       kindLabel,
+      mime,
+      isTextual,
       owner:        details ? details.owner        : null,
       octal:        details ? details.octal        : null,
       isReadOnly:   details ? details.isReadOnly    : false,

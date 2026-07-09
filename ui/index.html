@@ -503,6 +503,62 @@
       color: var(--err-color);
     }
 
+    /* F3 Viewer "View as:" tab row + sandboxed iframe */
+    .viewer-extraction {
+      margin-top: 4px;
+      width: 100%;
+    }
+    .viewer-extraction-tabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+      flex-wrap: wrap;
+    }
+    .viewer-extraction-tabs-label {
+      font-size: 11px;
+      color: var(--text3);
+    }
+    .viewer-tab {
+      font-size: 11px;
+      padding: 3px 10px;
+      background: var(--inactive-tab);
+      border: 1px solid var(--border2);
+      border-radius: 12px;
+      color: var(--text2);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background var(--transition);
+    }
+    .viewer-tab:hover { background: var(--bg3); color: var(--text); }
+    .viewer-tab.active { background: var(--active-tab); color: var(--text); font-weight: 600; }
+    .viewer-extraction-body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 120px;
+      width: 100%;
+    }
+    .viewer-extraction-frame {
+      width: 100%;
+      min-height: 320px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg2);
+    }
+    .viewer-extraction-spinner {
+      display: inline-block;
+      width: 20px; height: 20px;
+      border: 2px solid var(--border2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: paco-spin 0.7s linear infinite;
+    }
+    .viewer-extraction-error {
+      font-size: 12px;
+      color: var(--text3);
+    }
+
     /* Tabs */
     .tabs-bar {
       flex: 0 0 var(--tab-h);
@@ -1310,6 +1366,7 @@
   </div>
 
   <script src="/paco/ui-state.js"></script>
+  <script src="/paco/renderers/matcher.js"></script>
   <script src="adapter.js"></script>
   <script src="paco-app.js"></script>
 </body>
