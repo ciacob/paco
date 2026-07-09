@@ -655,8 +655,17 @@ if (mode === 'binary' && layout) {
 // HTML assembly
 // ---------------------------------------------------------------------------
 
+// Deliberately no font-size here (unlike font-family, which stays fixed
+// at monospace — alignment of raw/hex/line-numbered content depends on
+// a fixed-width font, not on any particular size). Leaving font-size
+// unset lets these <pre> blocks inherit whatever the composing page's
+// own body-level rule sets (see paco/ui-state.js's composeIframeDocument
+// and its textStyle parameter), which keeps this in sync with the rest
+// of the F3 Viewer's own current font-size automatically, rather than
+// hardcoding a second value here that could silently drift out of sync
+// with it over time.
 const BASE_STYLE =
-  'font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5;white-space:pre;margin:0;';
+  'font-family:ui-monospace,Menlo,Consolas,monospace;line-height:1.5;white-space:pre;margin:0;';
 
 function assembleHtml({ mode, bodyText, gutterText, config, layout }) {
   const P = sanitizeIdPrefix(config.idPrefix);
