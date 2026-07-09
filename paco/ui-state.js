@@ -958,9 +958,46 @@ function _viewerRecent(entries, field) {
  *                                   as the fallback label when there's no MIME match
  * @returns {string}
  */
+/**
+ * Whether a MIME type sits in the IANA "vnd." (vendor-specific) or "x-"
+ * (unregistered/experimental) subtype namespace, rather than being a
+ * clean, standard type — these are exactly the ones that read as noise
+ * in a UI: needlessly long and technical for vnd. types (e.g.
+ * "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+ * for a plain .docx) or just cryptic for x- types (e.g.
+ * "image/x-canon-cr2" for a .cr2) — neither is how anyone actually
+ * recognizes the file; they'd know it by its extension. Also treats any
+ * excessively long mime string the same way regardless of its specific
+ * subtype convention, as a defensive catch-all for whatever else is out
+ * there that doesn't happen to match either prefix.
+ *
+ * @param {string|null} mime
+ * @returns {boolean}
+ */
+function isVendorOrExperimentalMime(mime) {
+  if (!mime) return false;
+  return /^[a-z0-9.+-]+\/(vnd\.|x-)/i.test(mime) || mime.length > 40;
+}
+
+/**
+ * @param {boolean} isTextual
+ * @param {string|null} mime
+ * @param {string} ext — with or without the leading dot; either works
+ * @returns {string} e.g. "text \u2014 text/html file", or
+ *   "binary \u2014 DOCX file" for a vendor/experimental mime where the
+ *   extension reads far better than the raw MIME type would
+ */
 function viewerKindLabel(isTextual, mime, ext) {
   const kind = isTextual ? 'text' : 'binary';
-  const label = mime || (ext ? ext.replace(/^\./, '').toUpperCase() : 'unknown');
+  const extLabel = ext ? ext.replace(/^\./, '').toUpperCase() : null;
+  // A clean, standard mime is still the most precise thing to show when
+  // we have one (e.g. "image/jpeg" is more informative than "JPG" or
+  // "JPEG", which aren't even guaranteed to agree with each other) — the
+  // extension only takes over when the mime itself would be the worse
+  // of the two to display, or is missing entirely.
+  const label = (mime && !isVendorOrExperimentalMime(mime))
+    ? mime
+    : (extLabel || mime || 'unknown');
   return `${kind} \u2014 ${label} file`;
 }
 

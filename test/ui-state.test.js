@@ -1393,6 +1393,39 @@ describe('viewerKindLabel', () => {
   test('no extension at all and no MIME match → "unknown"', () => {
     assert.equal(S.viewerKindLabel(true, null, ''), 'text \u2014 unknown file');
   });
+
+  test('a vnd.-namespace MIME with an extension available prefers the extension — the actual bug report', () => {
+    assert.equal(
+      S.viewerKindLabel(false, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.docx'),
+      'binary \u2014 DOCX file'
+    );
+  });
+
+  test('other common Office vnd. MIME types also resolve to their extension', () => {
+    assert.equal(S.viewerKindLabel(false, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.xlsx'), 'binary \u2014 XLSX file');
+    assert.equal(S.viewerKindLabel(false, 'application/vnd.oasis.opendocument.text', '.odt'), 'binary \u2014 ODT file');
+    assert.equal(S.viewerKindLabel(false, 'application/vnd.ms-excel', '.xls'), 'binary \u2014 XLS file');
+  });
+
+  test('an x-namespace MIME (e.g. a camera raw format) also prefers the extension', () => {
+    assert.equal(S.viewerKindLabel(false, 'image/x-canon-cr2', '.cr2'), 'binary \u2014 CR2 file');
+  });
+
+  test('a vnd./x- MIME with NO extension available falls back to the raw mime — better than nothing', () => {
+    assert.equal(S.viewerKindLabel(false, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ''), 'binary \u2014 application/vnd.openxmlformats-officedocument.wordprocessingml.document file');
+  });
+
+  test('an excessively long mime not matching vnd./x- is ALSO treated as ugly (defensive length catch-all)', () => {
+    const longMime = 'application/x' + 'y'.repeat(40); // 40+ chars, no vnd./x- match at the subtype boundary itself
+    assert.equal(S.viewerKindLabel(false, longMime, '.foo'), 'binary \u2014 FOO file');
+  });
+
+  test('a clean, standard MIME is still preferred over the extension when both are available', () => {
+    // Precision matters here: "image/jpeg" is more informative than a
+    // bare "JPG"/"JPEG" (which don't even reliably agree with each
+    // other), so a non-vendor mime should win, not just be a fallback.
+    assert.equal(S.viewerKindLabel(false, 'image/jpeg', '.jpg'), 'binary \u2014 image/jpeg file');
+  });
 });
 
 // ─── viewerPermissionGrid ─────────────────────────────────────────────────────
