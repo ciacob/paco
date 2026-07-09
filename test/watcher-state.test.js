@@ -154,76 +154,13 @@ describe('shouldRefresh', () => {
 
 // ─── makeDebounced ────────────────────────────────────────────────────────────
 
-describe('makeDebounced', () => {
-  // Use fake timers injected via the timers parameter
-  function makeFakeTimers() {
-    const callbacks = new Map();
-    let seq = 0;
-    const fakeSetTimeout = (fn, delay) => {
-      const id = ++seq;
-      callbacks.set(id, { fn, delay });
-      return id;
-    };
-    const fakeClearTimeout = (id) => { callbacks.delete(id); };
-    const flush = (id) => {
-      const entry = callbacks.get(id);
-      if (entry) { callbacks.delete(id); entry.fn(); }
-    };
-    const pending = () => [...callbacks.keys()];
-    return { fakeSetTimeout, fakeClearTimeout, flush, pending, seq: () => seq };
-  }
-
-  test('fires after delay', () => {
-    const t = makeFakeTimers();
-    const calls = [];
-    const fn = (...args) => calls.push(args);
-    const d = W.makeDebounced(fn, 300, { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
-
-    d('a');
-    assert.equal(t.pending().length, 1);
-    t.flush(t.pending()[0]);
-    assert.deepEqual(calls, [['a']]);
-  });
-
-  test('coalesces multiple rapid calls — only last fires', () => {
-    const t = makeFakeTimers();
-    const calls = [];
-    const d = W.makeDebounced((...args) => calls.push(args), 300,
-      { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
-
-    d('first');
-    d('second');
-    d('third');
-
-    // Only one timer should be pending (previous ones cancelled)
-    assert.equal(t.pending().length, 1);
-    t.flush(t.pending()[0]);
-    assert.deepEqual(calls, [['third']]);
-  });
-
-  test('cancel() prevents firing', () => {
-    const t = makeFakeTimers();
-    const calls = [];
-    const d = W.makeDebounced((...args) => calls.push(args), 300,
-      { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
-
-    d('hello');
-    d.cancel();
-    assert.equal(t.pending().length, 0);
-    assert.deepEqual(calls, []);
-  });
-
-  test('can fire multiple times independently', () => {
-    const t = makeFakeTimers();
-    const calls = [];
-    const d = W.makeDebounced((...args) => calls.push(args), 300,
-      { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
-
-    d('first');
-    t.flush(t.pending()[0]);
-    d('second');
-    t.flush(t.pending()[0]);
-
-    assert.deepEqual(calls, [['first'], ['second']]);
+// Full behavioral coverage moved to test/ui-state.test.js — makeDebounced's
+// canonical implementation now lives in paco/ui-state.js (see that file's
+// own comment on why). This just confirms the re-export here is correctly
+// wired to that same implementation, not a second copy that could drift.
+describe('makeDebounced (re-export)', () => {
+  test('watcher-state.makeDebounced is the exact same function as ui-state.makeDebounced', () => {
+    const S = require('../paco/ui-state');
+    assert.equal(W.makeDebounced, S.makeDebounced);
   });
 });

@@ -13,6 +13,59 @@
  * This makes the entire UI logic unit-testable without a browser.
  */
 
+// ─── Debounce factory ─────────────────────────────────────────────────────────
+
+/**
+ * Returns a debounced version of fn that fires after `delayMs` of silence.
+ * Each call resets the timer. The returned function also exposes `.cancel()`.
+ *
+ * Pure in the sense that it's a deterministic factory — the returned closure
+ * has side effects (timers) but the factory itself is testable via fake timers.
+ *
+ * Originally lived in paco/watcher-state.js (server-side filesystem-watch
+ * debouncing only); relocated here — the one module already loaded both
+ * server-side (Node tests, tasks) and client-side (<script> tag) — so the
+ * UI layer can reuse the exact same tested implementation (e.g. debouncing
+ * the F3 Viewer's reaction to a selection click that might be immediately
+ * superseded by navigation) rather than a second, drifting copy of it.
+ * watcher-state.js now re-exports this one rather than defining its own.
+ *
+ * @param {Function} fn
+ * @param {number|Function} delayMs — a fixed value, or a zero-arg function
+ *   returning the current value (re-read on every call — e.g. a config
+ *   value that can change between when this debounced wrapper was CREATED
+ *   and when it's actually SCHEDULED, rather than a value baked in once
+ *   and never revisited)
+ * @param {object}   [timers]  — injectable { setTimeout, clearTimeout } for testing
+ */
+function makeDebounced(fn, delayMs, timers) {
+  // Deliberately NOT { setTimeout, clearTimeout } — destructuring these
+  // into a plain object and later calling them as t.setTimeout(...)/
+  // t.clearTimeout(...) throws "Illegal invocation" in a real browser:
+  // they're native, branded Web APIs that require `this` to actually be
+  // the real window/global object when called as a method, and a plain
+  // object literal isn't that. Node's own timer implementation happens
+  // to be lenient about this (unbound, this-agnostic) — confirmed via a
+  // real user session: this exact bug passed every test in this suite
+  // (Node) yet broke immediately in the browser this code actually runs
+  // in. Wrapping in arrow functions that call the bare, unqualified
+  // setTimeout/clearTimeout identifiers sidesteps the whole issue —
+  // called that way, with no object-method receiver at all, browsers
+  // resolve them correctly regardless.
+  const t = timers || {
+    setTimeout:   (...args) => setTimeout(...args),
+    clearTimeout: (...args) => clearTimeout(...args),
+  };
+  let handle = null;
+  const debounced = (...args) => {
+    if (handle !== null) t.clearTimeout(handle);
+    const effectiveDelay = typeof delayMs === 'function' ? delayMs() : delayMs;
+    handle = t.setTimeout(() => { handle = null; fn(...args); }, effectiveDelay);
+  };
+  debounced.cancel = () => { if (handle !== null) { t.clearTimeout(handle); handle = null; } };
+  return debounced;
+}
+
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
 /**
@@ -1174,6 +1227,7 @@ const uiState = {
   orderRendererTabsForDisplay,
   siblingMediaRendererName,
   composeIframeDocument,
+  makeDebounced,
 };
 
 // Always expose as a browser global when running in a browser context.

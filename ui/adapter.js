@@ -39,13 +39,34 @@
   };
   function _dlog(...args) { if (window.PACO_DEBUG) console.log(...args); }
 
+  // Separate, dedicated flag for the F3 Viewer's selection-click debounce
+  // specifically (see paco-app.js's own _debouncedViewerRefresh comment for
+  // what it's tracking) — deliberately NOT sharing PACO_DEBUG above. That
+  // one fires on every single assign()/WS message across the whole app;
+  // turning it on to trace one specific, narrow debounce timing issue
+  // buries the handful of relevant lines in a flood of unrelated traffic,
+  // making it useless for exactly the kind of tracing it exists for.
+  // Toggle from the browser console:
+  //   pacoDebugDebounce(true)   — turn on, persists across reloads
+  //   pacoDebugDebounce(false)  — turn back off
+  let _debugDebounceStored = '0';
+  try { _debugDebounceStored = localStorage.getItem('paco-debug-debounce') || '0'; } catch (_) {}
+  window.PACO_DEBUG_DEBOUNCE = _debugDebounceStored === '1';
+  window.pacoDebugDebounce = function (on) {
+    window.PACO_DEBUG_DEBOUNCE = !!on;
+    try { localStorage.setItem('paco-debug-debounce', window.PACO_DEBUG_DEBOUNCE ? '1' : '0'); } catch (_) {}
+    console.log('[PACO] viewer-debounce logging', window.PACO_DEBUG_DEBOUNCE ? 'ENABLED' : 'disabled');
+  };
+
   // Printed unconditionally (not gated by PACO_DEBUG itself — nobody
   // would ever see the instructions for turning it ON if they were only
   // shown while already on) so the toggle is discoverable right where
   // anyone debugging PACO is already looking, rather than relying on
   // someone remembering it exists or digging through source comments.
   console.log(
-    '%c[PACO]%c verbose diagnostic logging (every assign()/WS message, in order) is available but OFF by default. Run %cpacoDebug(true)%c to enable it — the setting persists across reloads. %cpacoDebug(false)%c to turn it back off.',
+    '%c[PACO]%c verbose diagnostic logging (every assign()/WS message, in order) is available but OFF by default. Run %cpacoDebug(true)%c to enable it — the setting persists across reloads. %cpacoDebug(false)%c to turn it back off. For just the F3 Viewer selection-click debounce specifically (much less noisy), use %cpacoDebugDebounce(true)%c / %cpacoDebugDebounce(false)%c instead.',
+    'color:#4a9eff;font-weight:bold', 'color:inherit',
+    'color:#4a9eff;font-weight:bold', 'color:inherit',
     'color:#4a9eff;font-weight:bold', 'color:inherit',
     'color:#4a9eff;font-weight:bold', 'color:inherit',
     'color:#4a9eff;font-weight:bold', 'color:inherit'

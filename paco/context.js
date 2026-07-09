@@ -170,6 +170,26 @@ const DEFAULT_CONFIG = {
   //   grace period appropriate to that very different risk profile.
   extractionTimeoutMs: 30000,
   calcTimeoutMs: 300000,
+
+  // How long the F3 Viewer waits, after a plain click selects a file or
+  // folder, before actually reacting to it (rebuilding the Details table,
+  // fetching viewer-details, starting an extraction) — see paco-app.js's
+  // own _debouncedViewerRefresh comment for the full mechanism. Exists
+  // because a single click is ambiguous the instant it happens: it might
+  // be the whole gesture, or the first half of a double-click about to
+  // navigate that selection away again, and reacting instantly produces a
+  // visible flash of a folder's details that get replaced a moment later.
+  // 235ms was reached empirically, via live testing against a real user's
+  // actual double-click timing, not chosen up front: 150ms was too short
+  // (an observed double-click's two clicks were 196ms apart — the first
+  // click's render had already fired before the second one happened);
+  // 400ms reliably caught it but felt laggy for a genuine single click.
+  // 235ms comfortably exceeds the double-click gaps actually observed
+  // (196ms, 211ms) while feeling noticeably snappier than 400ms — a
+  // deliberate trade-off, not a safe margin against every OS's slowest
+  // configurable double-click speed (some allow up to ~500ms), should a
+  // future report trace back to this same class of issue.
+  viewerRefreshDebounceMs: 235,
 };
 
 // Maximum navigation history entries kept per panel

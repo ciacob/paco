@@ -23,6 +23,13 @@
   // why this exists and how to turn it on.
   function _dlog(...args) { if (window.PACO_DEBUG) console.log(...args); }
 
+  // Separate channel for the F3 Viewer selection-click debounce
+  // specifically — see adapter.js's own comment on PACO_DEBUG_DEBOUNCE for
+  // why this isn't just _dlog: that one fires on every assign()/WS message
+  // across the whole app, which buries the handful of lines relevant to
+  // debounce timing in unrelated noise. Toggle with pacoDebugDebounce(true).
+  function _dlogDebounce(...args) { if (window.PACO_DEBUG_DEBOUNCE) console.log(...args); }
+
   // ─── App state (single mutable object) ───────────────────────────────────────
 
   // F3 Viewer "View as:" renderer registry — fetched once at boot from
@@ -458,6 +465,56 @@
   });
 
   // ─── Viewer panel content rendering ────────────────────────────────────────
+
+  // Debounces the F3 Viewer's reaction to a plain selection click — NOT
+  // renderViewer() in general, and NOT the row's own selection/highlight
+  // update (renderList/renderFkeys stay immediate). Intent: a single click
+  // on a row is ambiguous the instant it happens (it might be the whole
+  // gesture, or the first half of a double-click about to navigate the
+  // selection away again), so the Viewer's own reaction is held back
+  // briefly rather than reacting instantly to something that might be
+  // superseded a moment later.
+  //
+  // History worth knowing if this needs touching again: the debounced
+  // refresh initially didn't fire AT ALL, for any click — turned out to be
+  // an unrelated bug in makeDebounced itself (the default { setTimeout,
+  // clearTimeout } fallback threw "Illegal invocation" in a real browser;
+  // see its own fix comment in paco/ui-state.js), not a cancellation
+  // issue, even though it looked exactly like one from the outside. Once
+  // that was actually fixed, a real trace showed the debounce alone
+  // WASN'T enough to prevent the flicker either — 150ms is shorter than
+  // the gap between a real double-click's two 'click' events, so the
+  // first click's debounced render can complete before the second click
+  // and subsequent navigation ever happen. navigate()'s own conditional
+  // cancel (only for a genuinely different target path, not a same-path
+  // refresh — see its comment for why that distinction matters) is the
+  // piece that actually closes that gap.
+  //
+  // The delay itself lives in config (viewerRefreshDebounceMs, see
+  // paco/context.js's own comment for the empirical tuning it came from —
+  // 235ms) rather than a constant here, per explicit request — a static,
+  // config-file value, not a live-adjustable runtime setting; there's no
+  // settings UI wired to it and none is planned. Read via a getter
+  // function, not captured once up front: appState.config is still just
+  // makeAppState()'s placeholder shape at the moment this file's top-level
+  // code runs — the real config only arrives once the first navigate()
+  // completes — so the value has to be looked up at the moment a click
+  // actually schedules a refresh, by which point it's genuinely loaded,
+  // not baked in early and stuck with whatever placeholder existed before
+  // that. DEFAULT_VIEWER_REFRESH_DEBOUNCE_MS below exists purely as a
+  // defensive fallback for that implausible-in-practice gap, matching
+  // context.js's own default so behavior is identical either way.
+  const DEFAULT_VIEWER_REFRESH_DEBOUNCE_MS = 235;
+  function _makeLoggedViewerRefresh(side) {
+    return S.makeDebounced(() => {
+      _dlogDebounce('[PACO viewer-debounce] FIRING renderViewer() for side:', side, 'at', new Date().toISOString());
+      renderViewer();
+    }, () => appState.config.viewerRefreshDebounceMs ?? DEFAULT_VIEWER_REFRESH_DEBOUNCE_MS);
+  }
+  const _debouncedViewerRefresh = {
+    left:  _makeLoggedViewerRefresh('left'),
+    right: _makeLoggedViewerRefresh('right'),
+  };
 
   // Per-side cache of the async enrichment (kind label, owner, permissions)
   // fetched by viewer-details.js for the current single-selection item, so
@@ -976,6 +1033,7 @@
    * an appState.viewerOpen check themselves.
    */
   function renderViewer() {
+    _dlogDebounce('[PACO viewer-debounce] renderViewer() called — viewerOpen:', appState.viewerOpen, 'at', new Date().toISOString());
     if (!appState.viewerOpen) return;
 
     const panels = {
@@ -1367,9 +1425,22 @@
         : { uid: state.activeUid, name: state.revealedName }); // defensive fallback, shouldn't diverge
     }
 
-    if (visibleTabs.length > 1) {
-      wrap.appendChild(_renderViewerExtractionTabs(side, entry.path, state, visibleTabs));
-    }
+    // Always rendered, even for a single tab — never omitted — so this
+    // row's height is reserved consistently regardless of how many tabs
+    // a given file happens to have. Two single-selection columns side by
+    // side, one with a real choice (e.g. an ambiguous media file with
+    // both Filmstrip/Waveform) and one without (a file with only one
+    // possible renderer), would otherwise have their iframes start at
+    // different vertical offsets — one under a real tab row, one flush
+    // against the top. See the .viewer-extraction-tabs-hidden CSS rule
+    // for the actual hiding mechanism: visibility:hidden rather than
+    // display:none specifically because it keeps this row's layout box
+    // (and thus its height) intact while making it invisible AND
+    // non-interactive, rather than collapsing the space it would
+    // otherwise reserve.
+    const tabsRow = _renderViewerExtractionTabs(side, entry.path, state, visibleTabs);
+    if (visibleTabs.length <= 1) tabsRow.classList.add('viewer-extraction-tabs-hidden');
+    wrap.appendChild(tabsRow);
 
     wrap.appendChild(_renderViewerExtractionBody(state, textStyle));
     frag.appendChild(wrap);
@@ -1606,6 +1677,26 @@
     if (appState.busy) { console.warn('[PACO] navigate blocked — busy'); return; }
     const p        = appState.panels[side];
     const taskPath = targetPath || p.path || '';
+
+    // Cancel this side's pending debounced Viewer refresh — but ONLY when
+    // actually navigating to a genuinely DIFFERENT path, not a same-path
+    // "refresh" (re-navigating to wherever the panel already is). That
+    // distinction is what an earlier version of this fix got wrong:
+    // cancelling unconditionally here also caught _drainWatchQueue()'s own
+    // background auto-refresh (navigate(side, appState.panels[side].path,
+    // ...) — same path, not a new one), which fires for reasons that have
+    // nothing to do with a just-preceding click and broke selection clicks
+    // entirely. A same-path refresh doesn't invalidate whatever's
+    // currently selected on this side, so it has no business cancelling
+    // anything; only a genuine move to somewhere else does — which is
+    // exactly what a folder double-click (or Enter right after selecting
+    // one, or a breadcrumb/Up/tab-switch/volume-change click) actually is.
+    // Safe to call even when nothing happens to be pending.
+    if (taskPath !== p.path) {
+      _dlogDebounce('[PACO viewer-debounce] navigate() cancelling pending refresh for side:', side, 'old path:', p.path, 'new path:', taskPath, 'at', new Date().toISOString());
+      _debouncedViewerRefresh[side].cancel();
+    }
+
     const tabId    = opts.tabId || p.activeTab;
     _dlog('[PACO] navigate', side, taskPath, 'tab:', tabId);
     adapter.assign('worker/tasks/navigate.js', {
@@ -2028,7 +2119,12 @@
         }
         renderList(side, appState.panels[side]);
         renderFkeys();
-        renderViewer();
+        // Debounced, not immediate — see _debouncedViewerRefresh's own
+        // declaration comment. Under active investigation: logging when
+        // this gets scheduled, to compare against whether/when it
+        // actually fires.
+        _dlogDebounce('[PACO viewer-debounce] scheduling refresh for side:', side, 'path:', entry.path, 'at', new Date().toISOString());
+        _debouncedViewerRefresh[side]();
       });
 
       row.addEventListener('dblclick', () => {

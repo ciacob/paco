@@ -1617,3 +1617,122 @@ describe('composeIframeDocument', () => {
     assert.doesNotMatch(doc, /<style>/);
   });
 });
+
+// ─── makeDebounced ────────────────────────────────────────────────────────────
+
+// Moved here from test/watcher-state.test.js — makeDebounced's canonical
+// implementation now lives in this module (see its own header comment for
+// why: it's the one already loaded both server-side and client-side, so the
+// F3 Viewer's own selection-click debouncing can reuse this exact, already-
+// tested implementation instead of a second copy). watcher-state.test.js
+// keeps a thin test confirming its own re-export points at this same
+// function, rather than duplicating this full behavioral suite.
+describe('makeDebounced', () => {
+  // Use fake timers injected via the timers parameter
+  function makeFakeTimers() {
+    const callbacks = new Map();
+    let seq = 0;
+    const fakeSetTimeout = (fn, delay) => {
+      const id = ++seq;
+      callbacks.set(id, { fn, delay });
+      return id;
+    };
+    const fakeClearTimeout = (id) => { callbacks.delete(id); };
+    const flush = (id) => {
+      const entry = callbacks.get(id);
+      if (entry) { callbacks.delete(id); entry.fn(); }
+    };
+    const pending = () => [...callbacks.keys()];
+    const delayOf = (id) => { const e = callbacks.get(id); return e ? e.delay : undefined; };
+    return { fakeSetTimeout, fakeClearTimeout, flush, pending, delayOf, seq: () => seq };
+  }
+
+  test('fires after delay', () => {
+    const t = makeFakeTimers();
+    const calls = [];
+    const fn = (...args) => calls.push(args);
+    const d = S.makeDebounced(fn, 300, { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
+
+    d('a');
+    assert.equal(t.pending().length, 1);
+    t.flush(t.pending()[0]);
+    assert.deepEqual(calls, [['a']]);
+  });
+
+  test('coalesces multiple rapid calls — only last fires', () => {
+    const t = makeFakeTimers();
+    const calls = [];
+    const d = S.makeDebounced((...args) => calls.push(args), 300,
+      { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
+
+    d('first');
+    d('second');
+    d('third');
+
+    // Only one timer should be pending (previous ones cancelled)
+    assert.equal(t.pending().length, 1);
+    t.flush(t.pending()[0]);
+    assert.deepEqual(calls, [['third']]);
+  });
+
+  test('cancel() prevents firing', () => {
+    const t = makeFakeTimers();
+    const calls = [];
+    const d = S.makeDebounced((...args) => calls.push(args), 300,
+      { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
+
+    d('hello');
+    d.cancel();
+    assert.equal(t.pending().length, 0);
+    assert.deepEqual(calls, []);
+  });
+
+  test('can fire multiple times independently', () => {
+    const t = makeFakeTimers();
+    const calls = [];
+    const d = S.makeDebounced((...args) => calls.push(args), 300,
+      { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
+
+    d('first');
+    t.flush(t.pending()[0]);
+    d('second');
+    t.flush(t.pending()[0]);
+
+    assert.deepEqual(calls, [['first'], ['second']]);
+  });
+
+  test('cancel() is safe to call when nothing is pending', () => {
+    const t = makeFakeTimers();
+    const d = S.makeDebounced(() => {}, 300, { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
+    assert.doesNotThrow(() => d.cancel());
+  });
+
+  test('delayMs may be a zero-arg function — its return value is used as the actual delay', () => {
+    const t = makeFakeTimers();
+    let currentDelay = 500;
+    const d = S.makeDebounced(() => {}, () => currentDelay,
+      { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
+
+    d();
+    assert.equal(t.delayOf(t.pending()[0]), 500);
+  });
+
+  test('a function delayMs is re-invoked on every call, not cached from the first', () => {
+    const t = makeFakeTimers();
+    let currentDelay = 100;
+    const calls = [];
+    const d = S.makeDebounced((...args) => calls.push(args), () => currentDelay,
+      { setTimeout: t.fakeSetTimeout, clearTimeout: t.fakeClearTimeout });
+
+    d('first');
+    assert.equal(t.delayOf(t.pending()[0]), 100);
+    t.flush(t.pending()[0]);
+
+    currentDelay = 250; // simulates e.g. appState.config having changed/loaded since
+    d('second');
+    assert.equal(t.delayOf(t.pending()[0]), 250);
+    t.flush(t.pending()[0]);
+
+    assert.deepEqual(calls, [['first'], ['second']]);
+  });
+});

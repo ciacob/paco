@@ -7,29 +7,13 @@
  * No fs.watch, no WS, no side effects — fully testable.
  */
 
-// ─── Debounce factory ─────────────────────────────────────────────────────────
-
-/**
- * Returns a debounced version of fn that fires after `delayMs` of silence.
- * Each call resets the timer. The returned function also exposes `.cancel()`.
- *
- * Pure in the sense that it's a deterministic factory — the returned closure
- * has side effects (timers) but the factory itself is testable via fake timers.
- *
- * @param {Function} fn
- * @param {number}   delayMs
- * @param {object}   [timers]  — injectable { setTimeout, clearTimeout } for testing
- */
-function makeDebounced(fn, delayMs, timers) {
-  const t = timers || { setTimeout, clearTimeout };
-  let handle = null;
-  const debounced = (...args) => {
-    if (handle !== null) t.clearTimeout(handle);
-    handle = t.setTimeout(() => { handle = null; fn(...args); }, delayMs);
-  };
-  debounced.cancel = () => { if (handle !== null) { t.clearTimeout(handle); handle = null; } };
-  return debounced;
-}
+// makeDebounced used to be defined here — relocated to paco/ui-state.js (the
+// one module already loaded both server-side and client-side) so the F3
+// Viewer's own selection-click debouncing could reuse the exact same tested
+// implementation instead of a second, drifting copy of it. Re-exported below
+// so every existing require('./watcher-state').makeDebounced call site keeps
+// working unchanged.
+const { makeDebounced } = require('./ui-state');
 
 // ─── Path matching ────────────────────────────────────────────────────────────
 

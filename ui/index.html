@@ -557,6 +557,20 @@
       margin-bottom: 6px;
       flex-wrap: wrap;
     }
+    /* Applied when a file only has one possible "View as" tab — nothing
+       meaningful to actually choose between, so showing a single,
+       non-functional pill would just be clutter. visibility:hidden
+       (never display:none) keeps this row's layout box, and therefore
+       its height, exactly as it would be with real tabs shown — see
+       _renderViewerExtraction's own comment for why that reserved height
+       matters (keeping two side-by-side iframes' top edges aligned
+       regardless of whether one side has a real tab choice and the other
+       doesn't). visibility:hidden also makes the row non-interactive,
+       same as display:none would — the difference is purely about
+       whether the space collapses. */
+    .viewer-extraction-tabs-hidden {
+      visibility: hidden;
+    }
     .viewer-extraction-tabs-label {
       font-size: 11px;
       color: var(--text3);

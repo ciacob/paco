@@ -219,6 +219,22 @@ describe('config', () => {
     assert.equal(cfg.calcTimeoutMs, 300000); // unchanged default
   });
 
+  test('readConfig defaults viewerRefreshDebounceMs on first boot', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.viewerRefreshDebounceMs, 235);
+  });
+
+  test('viewerRefreshDebounceMs is overridable via updateConfig without disturbing other keys', () => {
+    const ctx = freshContext();
+    ctx.bootstrap();
+    ctx.updateConfig({ viewerRefreshDebounceMs: 300 });
+    const cfg = ctx.readConfig();
+    assert.equal(cfg.viewerRefreshDebounceMs, 300);
+    assert.equal(cfg.extractionTimeoutMs, 30000); // unchanged default
+  });
+
   test('writeConfig persists values', () => {
     const ctx = freshContext();
     ctx.bootstrap();
