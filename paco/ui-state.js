@@ -1187,6 +1187,15 @@ function siblingMediaRendererName(name) {
  * style block — extractor output still renders, using browser defaults,
  * same as before this existed.
  *
+ * `selectionStyle`, if given, is emitted as a `::selection { ... }` rule
+ * — same reasoning as textStyle, but for the browser's own native
+ * text-selection highlight (dragging to select text inside the iframe)
+ * rather than falling back to the browser's own theme-unaware default
+ * (typically a jarring blue, regardless of the app's own theme). Same
+ * caller-obtains-the-values contract, same graceful all-or-nothing
+ * omission if incomplete — native selection just uses the browser
+ * default in that case, same as before this existed.
+ *
  * Always emits one base rule regardless of textStyle: `html,body{height:
  * 100%;margin:0;}`. Without it, an extractor's own height:100% (e.g.
  * image-extractor's flex-centering wrapper around its thumbnail) has
@@ -1202,18 +1211,22 @@ function siblingMediaRendererName(name) {
  *
  * @param {string} bodyHtml — the extractor's own HTML output, verbatim
  * @param {{color:string, fontFamily:string, fontSize:string}} [textStyle]
+ * @param {{backgroundColor:string, color:string}} [selectionStyle]
  * @returns {string} a complete HTML document string, ready for `srcdoc`
  */
-function composeIframeDocument(bodyHtml, textStyle) {
+function composeIframeDocument(bodyHtml, textStyle, selectionStyle) {
   const baseStyle = '<style>html,body{height:100%;margin:0;}</style>';
   const themeStyle = (textStyle && textStyle.color && textStyle.fontFamily && textStyle.fontSize)
     ? `<style>body{color:${textStyle.color};font-family:${textStyle.fontFamily};font-size:${textStyle.fontSize};}</style>`
+    : '';
+  const selectionStyleRule = (selectionStyle && selectionStyle.backgroundColor && selectionStyle.color)
+    ? `<style>::selection{background-color:${selectionStyle.backgroundColor};color:${selectionStyle.color};}</style>`
     : '';
   return (
     '<!DOCTYPE html><html><head><meta charset="utf-8">' +
     '<meta http-equiv="Content-Security-Policy" content="' +
     "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:;" +
-    '">' + baseStyle + themeStyle + '</head><body>' + (bodyHtml || '') + '</body></html>'
+    '">' + baseStyle + themeStyle + selectionStyleRule + '</head><body>' + (bodyHtml || '') + '</body></html>'
   );
 }
 

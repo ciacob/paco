@@ -19,6 +19,7 @@ const {
   byteToLatin1CharRange,
   buildHexDumpText,
   findMatches,
+  escapeRegExp,
   charOffsetToByteCoordinate,
   mapSelectionToMirroredRanges,
   applyHighlights,
@@ -332,6 +333,63 @@ test('findMatches: zero-length regex matches do not cause an infinite loop', () 
   assert.ok(matches.length > 0);
 });
 
+test('findMatches: plain mode is case-sensitive by default (caseInsensitive omitted) — unchanged from before this parameter existed', () => {
+  assert.deepEqual(findMatches('Hello WORLD hello', 'hello', false), [{ start: 12, end: 17 }]);
+});
+
+test('findMatches: plain mode, caseInsensitive:true matches regardless of case', () => {
+  const matches = findMatches('Hello WORLD hello', 'hello', false, true);
+  assert.deepEqual(matches, [
+    { start: 0, end: 5 },
+    { start: 12, end: 17 },
+  ]);
+});
+
+test('findMatches: regex mode is case-sensitive by default (caseInsensitive omitted)', () => {
+  assert.deepEqual(findMatches('Cat cat CAT', 'cat', true), [{ start: 4, end: 7 }]);
+});
+
+test('findMatches: regex mode, caseInsensitive:true adds the "i" flag', () => {
+  const matches = findMatches('Cat cat CAT', 'cat', true, true);
+  assert.deepEqual(matches, [
+    { start: 0, end: 3 },
+    { start: 4, end: 7 },
+    { start: 8, end: 11 },
+  ]);
+});
+
+test('findMatches: plain mode + caseInsensitive with a query containing regex-special characters matches LITERALLY, not as a pattern', () => {
+  // The actual mechanism under test: case-insensitive plain mode now
+  // routes through the regex engine (see findMatches' own comment for
+  // why — avoiding toLowerCase() on a potentially large haystack), so a
+  // query like "$5.00" must be escaped before becoming a RegExp, or "."
+  // would match any character and "$" would anchor to end-of-string,
+  // silently corrupting what was supposed to be a literal substring search.
+  const matches = findMatches('Price: $5.00 (was $10.00)', '$5.00', false, true);
+  assert.deepEqual(matches, [{ start: 7, end: 12 }]); // exactly one match, not also matching "$10.00" or misbehaving
+});
+
+test('findMatches: a plain-mode query that looks like a regex quantifier ("a+b") is still a literal search, case-insensitive or not', () => {
+  assert.deepEqual(findMatches('a+b axxxb A+B', 'a+b', false), [{ start: 0, end: 3 }]);
+  assert.deepEqual(findMatches('a+b axxxb A+B', 'a+b', false, true), [
+    { start: 0, end: 3 },
+    { start: 10, end: 13 },
+  ]);
+});
+
+test('escapeRegExp: escapes every regex-special character', () => {
+  const special = '.*+?^${}()|[]\\';
+  const escaped = escapeRegExp(special);
+  // Using the escaped output as a regex pattern should match the
+  // original string literally, character for character.
+  const re = new RegExp('^' + escaped + '$');
+  assert.ok(re.test(special));
+});
+
+test('escapeRegExp: leaves ordinary characters untouched', () => {
+  assert.equal(escapeRegExp('hello world 123'), 'hello world 123');
+});
+
 // ---------------------------------------------------------------------------
 // charOffsetToByteCoordinate / mapSelectionToMirroredRanges
 // ---------------------------------------------------------------------------
@@ -595,4 +653,228 @@ test('getGenericPreview: two previews with distinct idPrefix values coexist on o
   assert.ok(doc.getElementById('a-body'));
   assert.ok(doc.getElementById('b-body'));
   assert.notEqual(doc.getElementById('a-body'), doc.getElementById('b-body'));
+});
+
+// ---------------------------------------------------------------------------
+// Find UI — static markup
+// ---------------------------------------------------------------------------
+
+test('getGenericPreview: Find UI has a leading "Find:" label and a hint-style placeholder, not a bare "Find" placeholder', () => {
+  const result = getGenericPreview(Buffer.from('hello world'), true);
+  const dom = new JSDOM(`<div id="root">${result.html}</div>`);
+  const doc = dom.window.document;
+  assert.match(doc.getElementById('ge-find-toolbar').textContent, /Find:/);
+  assert.equal(doc.getElementById('ge-find-input').getAttribute('placeholder'), 'Type and press Enter');
+});
+
+test('getGenericPreview: "case insensitive" checkbox is present, labelled, and preselected (checked) by default', () => {
+  const result = getGenericPreview(Buffer.from('hello world'), true);
+  const dom = new JSDOM(`<div id="root">${result.html}</div>`);
+  const doc = dom.window.document;
+  const checkbox = doc.getElementById('ge-find-case-insensitive');
+  assert.ok(checkbox);
+  assert.equal(checkbox.checked, true);
+  assert.match(doc.getElementById('ge-find-toolbar').textContent, /case insensitive/);
+});
+
+test('getGenericPreview: prev/next buttons start disabled — no search has run yet, so neither has anything to do', () => {
+  const result = getGenericPreview(Buffer.from('hello world'), true);
+  const dom = new JSDOM(`<div id="root">${result.html}</div>`);
+  const doc = dom.window.document;
+  assert.equal(doc.getElementById('ge-find-prev').disabled, true);
+  assert.equal(doc.getElementById('ge-find-next').disabled, true);
+});
+
+test('getGenericPreview: match counter is non-wrapping and muted', () => {
+  const result = getGenericPreview(Buffer.from('hello world'), true);
+  const dom = new JSDOM(`<div id="root">${result.html}</div>`);
+  const counter = dom.window.document.getElementById('ge-match-count');
+  assert.match(counter.getAttribute('style'), /white-space:\s*nowrap/);
+  assert.match(counter.getAttribute('style'), /opacity:\s*0\.7/);
+});
+
+test('getGenericPreview: disabled prev/next buttons force color:inherit (overriding any browser-native disabled-widget color) plus opacity for the muted look', () => {
+  const result = getGenericPreview(Buffer.from('hello world'), true);
+  assert.match(result.html, /#ge-find-toolbar button:disabled\{color:inherit;opacity:0\.7;\}/);
+});
+
+test('getGenericPreview: Find toolbar is fixed-positioned with a translucent, blurred background, and the content row has an id for the client script to pad', () => {
+  const result = getGenericPreview(Buffer.from('hello world'), true);
+  const dom = new JSDOM(`<div id="root">${result.html}</div>`);
+  const doc = dom.window.document;
+  const toolbarStyle = doc.getElementById('ge-find-toolbar').getAttribute('style');
+  assert.match(toolbarStyle, /position:\s*fixed/);
+  assert.match(toolbarStyle, /rgba\(0,\s*0,\s*0,\s*0\.1\)/);
+  assert.match(toolbarStyle, /backdrop-filter:\s*blur\(10px\)/);
+  assert.match(toolbarStyle, /-webkit-backdrop-filter:\s*blur\(10px\)/);
+  assert.ok(doc.getElementById('ge-content'));
+});
+
+// ---------------------------------------------------------------------------
+// Find UI — actual interactive behavior (executing the real <script>, not
+// just checking static markup shape — nothing else in this file runs the
+// script itself, since JSDOM only executes it with runScripts:'dangerously')
+// ---------------------------------------------------------------------------
+
+function domWithScriptRun(html) {
+  const dom = new JSDOM(`<!doctype html><html><body><div id="root">${html}</div></body></html>`, {
+    runScripts: 'dangerously',
+  });
+  return dom;
+}
+
+function pressEnter(input) {
+  input.dispatchEvent(new input.ownerDocument.defaultView.KeyboardEvent('keydown', { key: 'Enter' }));
+}
+
+test('Find UI: case-insensitive checkbox stays checked by default — a differently-cased query still finds the match', () => {
+  const result = getGenericPreview(Buffer.from('The Quick Brown Fox'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  assert.equal(doc.getElementById('ge-find-case-insensitive').checked, true, 'preselected, untouched');
+  input.value = 'quick'; // lowercase query against "Quick" in the text
+  pressEnter(input);
+  assert.equal(doc.getElementById('ge-match-count').textContent, '1 / 1');
+});
+
+test('Find UI: unchecking case-insensitive makes the search case-sensitive again', () => {
+  const result = getGenericPreview(Buffer.from('The Quick Brown Fox'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  const caseToggle = doc.getElementById('ge-find-case-insensitive');
+  caseToggle.checked = false;
+  input.value = 'quick'; // lowercase query, but "Quick" in the text is capitalized
+  pressEnter(input);
+  assert.equal(doc.getElementById('ge-match-count').textContent, '0 / 0', 'case-sensitive now, no match for the differently-cased query');
+});
+
+test('Find UI: a case-insensitive query containing regex-special characters matches literally, through the REAL generated client-side script', () => {
+  // Regression test for the actual bug this feature shipped with and had
+  // to be fixed: within buildClientScript's outer template literal, `\]`
+  // isn't a recognized JS escape sequence, so its backslash was silently
+  // dropped ("identity escape"), breaking escapeRegExp's own regex
+  // character class in the generated <script> specifically — the
+  // server-side, unit-tested copy was never affected, only the
+  // client-side mirror actually shipped to the browser. Exercises the
+  // real generated HTML+script end to end, not the server-side function
+  // directly, since that's the only way this specific bug would surface.
+  const result = getGenericPreview(Buffer.from('Price: $5.00 (was $10.00)'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  input.value = '$5.00'; // caseInsensitive stays checked (default) — routes through the regex path
+  pressEnter(input);
+  assert.equal(doc.getElementById('ge-match-count').textContent, '1 / 1', 'exactly one literal match, not corrupted by unescaped regex metacharacters');
+});
+
+test('Find UI: a query with multiple matches enables next but not prev (starts on the first match)', () => {
+  const result = getGenericPreview(Buffer.from('cat dog cat bird cat'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  input.value = 'cat';
+  pressEnter(input);
+  assert.equal(doc.getElementById('ge-match-count').textContent, '1 / 3');
+  assert.equal(doc.getElementById('ge-find-prev').disabled, true, 'already on the first match');
+  assert.equal(doc.getElementById('ge-find-next').disabled, false);
+});
+
+test('Find UI: a query with exactly one match disables both buttons — nowhere to go in either direction', () => {
+  const result = getGenericPreview(Buffer.from('cat dog bird'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  input.value = 'dog';
+  pressEnter(input);
+  assert.equal(doc.getElementById('ge-match-count').textContent, '1 / 1');
+  assert.equal(doc.getElementById('ge-find-prev').disabled, true);
+  assert.equal(doc.getElementById('ge-find-next').disabled, true);
+});
+
+test('Find UI: a query with zero matches leaves both buttons disabled', () => {
+  const result = getGenericPreview(Buffer.from('cat dog bird'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  input.value = 'elephant';
+  pressEnter(input);
+  assert.equal(doc.getElementById('ge-match-count').textContent, '0 / 0');
+  assert.equal(doc.getElementById('ge-find-prev').disabled, true);
+  assert.equal(doc.getElementById('ge-find-next').disabled, true);
+});
+
+test('Find UI: clicking next repeatedly stops at the last match — does not wrap back to the first', () => {
+  const result = getGenericPreview(Buffer.from('cat dog cat bird cat'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  const nextBtn = doc.getElementById('ge-find-next');
+  input.value = 'cat';
+  pressEnter(input);
+  nextBtn.click(); // 1 -> 2
+  nextBtn.click(); // 2 -> 3 (last)
+  assert.equal(doc.getElementById('ge-match-count').textContent, '3 / 3');
+  assert.equal(nextBtn.disabled, true, 'no wrap — next has nothing to do at the last match');
+  nextBtn.click(); // should be a no-op, disabled or not (defensive guard in stepMatch)
+  assert.equal(doc.getElementById('ge-match-count').textContent, '3 / 3', 'stayed on the last match, did not wrap to the first');
+});
+
+test('Find UI: clicking prev from the first match is a no-op — does not wrap back to the last', () => {
+  const result = getGenericPreview(Buffer.from('cat dog cat bird cat'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  const prevBtn = doc.getElementById('ge-find-prev');
+  input.value = 'cat';
+  pressEnter(input);
+  assert.equal(doc.getElementById('ge-match-count').textContent, '1 / 3');
+  prevBtn.click();
+  assert.equal(doc.getElementById('ge-match-count').textContent, '1 / 3', 'stayed on the first match, did not wrap to the last');
+});
+
+test('Find UI: next/prev correctly re-enable/disable as you step through the middle of the match list', () => {
+  const result = getGenericPreview(Buffer.from('cat dog cat bird cat'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  const nextBtn = doc.getElementById('ge-find-next');
+  const prevBtn = doc.getElementById('ge-find-prev');
+  input.value = 'cat';
+  pressEnter(input);
+  nextBtn.click(); // now on match 2 of 3 — neither boundary
+  assert.equal(doc.getElementById('ge-match-count').textContent, '2 / 3');
+  assert.equal(nextBtn.disabled, false);
+  assert.equal(prevBtn.disabled, false);
+});
+
+test('Find UI: a disabled button genuinely computes the theme-induced color AND the muted opacity, confirmed via getComputedStyle', () => {
+  const result = getGenericPreview(Buffer.from('hello world'), true);
+  // Mirrors the real scenario: composeIframeDocument injects a theme
+  // color onto <body> (see its own textStyle parameter) — simulated
+  // here directly, since this test constructs its own bare document
+  // rather than going through that function.
+  const dom = new (require('jsdom').JSDOM)(
+    `<!doctype html><html><body style="color:rgb(201,205,212);"><div id="root">${result.html}</div></body></html>`,
+    { runScripts: 'dangerously' }
+  );
+  const doc = dom.window.document;
+  const prevBtn = doc.getElementById('ge-find-prev'); // starts disabled, no search has run
+  assert.equal(prevBtn.disabled, true);
+  const cs = dom.window.getComputedStyle(prevBtn);
+  assert.equal(cs.color, 'rgb(201, 205, 212)', 'color:inherit picked up the theme-induced body color');
+  assert.equal(cs.opacity, '0.7');
+});
+
+test('Find UI: the content row gets a non-empty paddingTop from the toolbar\'s measured height', () => {
+  // JSDOM does no real layout, so offsetHeight is 0 here regardless of the
+  // toolbar's actual content — this can't verify the PIXEL VALUE is
+  // correct in a real browser, only that the mechanism runs without
+  // error and actually sets contentEl.style.paddingTop (rather than, say,
+  // silently failing to find either element).
+  const result = getGenericPreview(Buffer.from('hello world'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  assert.match(doc.getElementById('ge-content').style.paddingTop, /^\d+px$/);
 });

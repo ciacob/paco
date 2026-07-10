@@ -1649,6 +1649,47 @@ describe('composeIframeDocument', () => {
     assert.doesNotMatch(doc, /color:/);
     assert.doesNotMatch(doc, /font-family:/);
   });
+
+  test('with a selectionStyle, emits a ::selection rule with the given background-color/color', () => {
+    const doc = S.composeIframeDocument('<p>x</p>', null, { backgroundColor: 'rgb(42, 58, 92)', color: 'rgb(201, 205, 212)' });
+    assert.match(doc, /<style>::selection\{background-color:rgb\(42, 58, 92\);color:rgb\(201, 205, 212\);\}<\/style>/);
+  });
+
+  test('without a selectionStyle, no ::selection rule is emitted', () => {
+    const doc = S.composeIframeDocument('<p>x</p>');
+    assert.doesNotMatch(doc, /::selection/);
+  });
+
+  test('a selectionStyle missing either backgroundColor or color is treated as absent — no partial ::selection rule', () => {
+    const doc1 = S.composeIframeDocument('<p>x</p>', null, { backgroundColor: 'red' }); // no color
+    const doc2 = S.composeIframeDocument('<p>x</p>', null, { color: 'red' }); // no backgroundColor
+    assert.doesNotMatch(doc1, /::selection/);
+    assert.doesNotMatch(doc2, /::selection/);
+  });
+
+  test('null selectionStyle behaves the same as omitting it', () => {
+    const doc = S.composeIframeDocument('<p>x</p>', null, null);
+    assert.doesNotMatch(doc, /::selection/);
+  });
+
+  test('textStyle and selectionStyle are independent — either can be present without the other', () => {
+    const onlySelection = S.composeIframeDocument('<p>x</p>', null, { backgroundColor: 'blue', color: 'white' });
+    assert.doesNotMatch(onlySelection, /body\{color:/);
+    assert.match(onlySelection, /::selection/);
+
+    const onlyText = S.composeIframeDocument('<p>x</p>', { color: 'red', fontFamily: 'monospace', fontSize: '12px' });
+    assert.match(onlyText, /body\{color:/);
+    assert.doesNotMatch(onlyText, /::selection/);
+  });
+
+  test('the ::selection rule appears before </head>, after the CSP meta, alongside the other style blocks', () => {
+    const doc = S.composeIframeDocument('<p>x</p>', null, { backgroundColor: 'blue', color: 'white' });
+    const cspIndex = doc.indexOf('Content-Security-Policy');
+    const selectionIndex = doc.indexOf('::selection');
+    const headCloseIndex = doc.indexOf('</head>');
+    assert.ok(cspIndex < selectionIndex, '::selection rule should come after the CSP meta');
+    assert.ok(selectionIndex < headCloseIndex, '::selection rule should still be inside <head>');
+  });
 });
 
 // ─── makeDebounced ────────────────────────────────────────────────────────────

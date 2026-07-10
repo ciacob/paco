@@ -331,19 +331,39 @@ function buildHexDumpText(buffer, config) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Escapes regex special characters so a plain string can be used as a
+ * literal pattern within a RegExp — used by findMatches' case-insensitive
+ * plain-mode path below.
+ */
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * Finds all non-overlapping matches of query in text. Never throws: an
  * invalid regex simply yields no matches rather than propagating a
  * SyntaxError, and zero-length regex matches are stepped over rather
  * than causing an infinite loop.
+ *
+ * @param {boolean} [caseInsensitive] — adds the regex 'i' flag. In plain
+ *   (non-regex) mode, this routes through the SAME regex engine rather
+ *   than text.toLowerCase()/query.toLowerCase() + indexOf — the query is
+ *   escaped first (escapeRegExp) so it's still matched as a literal
+ *   string, not interpreted as a pattern. Deliberate: toLowerCase() on
+ *   the whole haystack allocates a full copy of it on every search,
+ *   which is real waste for a potentially large file; the regex engine's
+ *   own case-folding does the comparison without duplicating the source
+ *   text at all.
  */
-function findMatches(text, query, useRegex) {
+function findMatches(text, query, useRegex, caseInsensitive) {
   const ranges = [];
   if (!query) return ranges;
 
-  if (useRegex) {
+  if (useRegex || caseInsensitive) {
+    const pattern = useRegex ? query : escapeRegExp(query);
     let re;
     try {
-      re = new RegExp(query, 'g');
+      re = new RegExp(pattern, caseInsensitive ? 'gi' : 'g');
     } catch (_err) {
       return ranges;
     }
@@ -358,6 +378,8 @@ function findMatches(text, query, useRegex) {
     return ranges;
   }
 
+  // Plain, case-sensitive — the simplest, fastest path, unchanged from
+  // before caseInsensitive existed.
   let idx = 0;
   while (true) {
     const found = text.indexOf(query, idx);
@@ -507,12 +529,17 @@ function applyHighlights(container, ranges, className){
   }
 }
 
-function findMatches(text, query, useRegex){
+function escapeRegExp(str){
+  return str.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+}
+
+function findMatches(text, query, useRegex, caseInsensitive){
   var ranges = [];
   if (!query) return ranges;
-  if (useRegex) {
+  if (useRegex || caseInsensitive) {
+    var pattern = useRegex ? query : escapeRegExp(query);
     var re;
-    try { re = new RegExp(query, 'g'); } catch(e){ return ranges; }
+    try { re = new RegExp(pattern, caseInsensitive ? 'gi' : 'g'); } catch(e){ return ranges; }
     var m;
     while ((m = re.exec(text)) !== null) {
       ranges.push({start: m.index, end: m.index + m[0].length});
@@ -536,9 +563,9 @@ var matchClass = P+'-match';
 var matchCurrentClass = P+'-match '+P+'-match-current';
 var mirrorClass = P+'-mirror';
 
-function runSearch(query, useRegex){
+function runSearch(query, useRegex, caseInsensitive){
   resetHighlights();
-  currentMatches = findMatches(body.textContent, query, useRegex);
+  currentMatches = findMatches(body.textContent, query, useRegex, caseInsensitive);
   currentMatchPos = currentMatches.length ? 0 : -1;
   applyHighlights(body, currentMatches, matchClass);
   updateMatchUi();
@@ -550,6 +577,13 @@ function updateMatchUi(){
   if (counter) counter.textContent = currentMatches.length ? (currentMatchPos+1) + ' / ' + currentMatches.length : '0 / 0';
   var spans = body.querySelectorAll('.'+matchClass);
   for (var i=0;i<spans.length;i++) spans[i].className = (i===currentMatchPos) ? matchCurrentClass : matchClass;
+  // Boundary-aware, not just "any matches at all" — with wrapping removed
+  // from stepMatch below, disabled now genuinely means "there is nothing
+  // for this button to do from here", both at zero matches (currentMatchPos
+  // stays -1, so both conditions are true) and at either end of the match
+  // list once a search has actually run.
+  if (prevBtn) prevBtn.disabled = currentMatchPos <= 0;
+  if (nextBtn) nextBtn.disabled = currentMatchPos < 0 || currentMatchPos >= currentMatches.length - 1;
 }
 
 function scrollToCurrent(){
@@ -559,18 +593,36 @@ function scrollToCurrent(){
 
 function stepMatch(delta){
   if (!currentMatches.length) return;
-  currentMatchPos = (currentMatchPos + delta + currentMatches.length) % currentMatches.length;
+  // No wrap, deliberately — Next at the last match and Prev at the first
+  // are no-ops (the disabled state above already prevents reaching here
+  // in the normal case; this stays as a defensive guard). Reaching an
+  // actual boundary is meaningful now instead of silently cycling back
+  // around, which gave no indication you'd reached either end.
+  var next = currentMatchPos + delta;
+  if (next < 0 || next >= currentMatches.length) return;
+  currentMatchPos = next;
   updateMatchUi();
   scrollToCurrent();
 }
 
 var input = document.getElementById(P+'-find-input');
 var regexToggle = document.getElementById(P+'-find-regex');
+var caseInsensitiveToggle = document.getElementById(P+'-find-case-insensitive');
 var nextBtn = document.getElementById(P+'-find-next');
 var prevBtn = document.getElementById(P+'-find-prev');
-if (input) input.addEventListener('keydown', function(e){ if(e.key==='Enter') runSearch(input.value, regexToggle && regexToggle.checked); });
+if (input) input.addEventListener('keydown', function(e){ if(e.key==='Enter') runSearch(input.value, regexToggle && regexToggle.checked, caseInsensitiveToggle && caseInsensitiveToggle.checked); });
 if (nextBtn) nextBtn.addEventListener('click', function(){ stepMatch(1); });
 if (prevBtn) prevBtn.addEventListener('click', function(){ stepMatch(-1); });
+
+// The toolbar is position:fixed (see assembleHtml's own comment), which
+// takes it out of normal document flow entirely — without this, the
+// content row would render starting right under where the toolbar WOULD
+// have been in flow, i.e. hidden behind it. Measured rather than a
+// guessed constant, since the toolbar's real height depends on the
+// font-size the theme happens to inject.
+var toolbar = document.getElementById(P+'-find-toolbar');
+var contentEl = document.getElementById(P+'-content');
+if (toolbar && contentEl) contentEl.style.paddingTop = toolbar.offsetHeight + 'px';
 
 if (mode === 'binary' && layout) {
   function charOffsetToByteCoordinate(offset){
@@ -680,19 +732,48 @@ function assembleHtml({ mode, bodyText, gutterText, config, layout }) {
     ? `<pre style="${BASE_STYLE}text-align:right;padding-right:8px;margin-right:8px;border-right:1px solid #ccc;color:#888;user-select:none;">${escapeForPre(gutterText)}</pre>`
     : '';
   const bodyHtml = `<pre id="${P}-body" data-mode="${mode}" style="${BASE_STYLE}overflow-x:auto;flex:1;">${escapedBody}</pre>`;
+  // Fixed to the top of the IFRAME'S OWN viewport (this is a separate
+  // document, so position:fixed is relative to its own initial containing
+  // block, not the outer PACO window) rather than scrolling with the
+  // content below it — translucent + blurred works over either theme's
+  // background without needing to know which one is active. The content
+  // row below needs compensating top padding for this, since fixed
+  // positioning takes the toolbar out of normal flow entirely — applied
+  // by the client script once the toolbar's real rendered height is
+  // known, not a guessed constant here, since that height depends on the
+  // font-size the theme happens to inject (see composeIframeDocument).
+  // -webkit-backdrop-filter is required for Safari, which doesn't support
+  // the unprefixed property.
   const findToolbar = config.interactive
-    ? '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;font-family:sans-serif;font-size:13px;">' +
-      `<input id="${P}-find-input" type="text" placeholder="Find" style="font-family:inherit;">` +
+    ? `<div id="${P}-find-toolbar" style="position:fixed;top:0;left:0;right:0;z-index:1;display:flex;align-items:center;gap:6px;padding:6px 10px;background:rgba(0,0,0,0.1);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);font-family:sans-serif;font-size:13px;">` +
+      '<span>Find:</span>' +
+      `<input id="${P}-find-input" type="text" placeholder="Type and press Enter" style="font-family:inherit;">` +
+      `<label style="display:flex;align-items:center;gap:2px;"><input id="${P}-find-case-insensitive" type="checkbox" checked>case insensitive</label>` +
       `<label style="display:flex;align-items:center;gap:2px;"><input id="${P}-find-regex" type="checkbox">regex</label>` +
-      `<button id="${P}-find-prev" type="button">prev</button>` +
-      `<button id="${P}-find-next" type="button">next</button>` +
-      `<span id="${P}-match-count">0 / 0</span>` +
+      `<button id="${P}-find-prev" type="button" disabled>prev</button>` +
+      `<button id="${P}-find-next" type="button" disabled>next</button>` +
+      `<span id="${P}-match-count" style="white-space:nowrap;opacity:0.7;">0 / 0</span>` +
       '</div>'
     : '';
   const script = config.interactive ? buildClientScript(mode, layout, P) : '';
   return (
-    `${findToolbar}<div style="display:flex;">${gutterHtml}${bodyHtml}</div>` +
-    `<style>.${P}-match{background:#ffe58f;}.${P}-match-current{background:#ffa940;}.${P}-mirror{background:#91caff;}</style>` +
+    `${findToolbar}<div id="${P}-content" style="display:flex;">${gutterHtml}${bodyHtml}</div>` +
+    `<style>.${P}-match{background:#ffe58f;}.${P}-match-current{background:#ffa940;}.${P}-mirror{background:#91caff;}` +
+    // Scoped to the toolbar specifically (not a bare button:disabled) —
+    // this file's only buttons happen to live there today, but scoping
+    // avoids silently reaching into anything else that might share this
+    // document later. color:inherit is doing real work here, not just
+    // being explicit for its own sake: many browsers apply their own
+    // native disabled-widget color (something like GrayText) to a
+    // disabled form control, which overrides inheritance entirely
+    // regardless of what the page's own color scheme is — this forces it
+    // back to whatever the theme's own injected body color actually is
+    // (see composeIframeDocument's textStyle), the same hardcoded,
+    // theme-induced color everything else in this document already
+    // renders in. opacity on top of that is what actually produces the
+    // muted look, same mechanism as the match counter above.
+    `#${P}-find-toolbar button:disabled{color:inherit;opacity:0.7;}` +
+    '</style>' +
     script
   );
 }
@@ -759,6 +840,7 @@ module.exports = {
   byteToLatin1CharRange,
   buildHexDumpText,
   findMatches,
+  escapeRegExp,
   charOffsetToByteCoordinate,
   mapSelectionToMirroredRanges,
   applyHighlights,

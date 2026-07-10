@@ -1139,7 +1139,8 @@
       const details = (cachedDetails && cachedDetails.path === col.entry.path) ? cachedDetails.details : null;
       if (!details) continue;
       const textStyle = _sampleDetailsTextStyle(infoElsBySide[col.side]);
-      columnElsBySide[col.side].appendChild(_renderViewerExtraction(col.side, col.entry, details, textStyle));
+      const selectionStyle = _sampleSelectionColors(col.side);
+      columnElsBySide[col.side].appendChild(_renderViewerExtraction(col.side, col.entry, details, textStyle, selectionStyle));
     }
 
     // Content height can change with every render independent of any
@@ -1340,6 +1341,44 @@
     return { color: cs.color, fontFamily: cs.fontFamily, fontSize: cs.fontSize };
   }
 
+  /**
+   * Sample the file list's own ALREADY-LIVE selected-row styling for the
+   * given side, so the F3 "View as" iframe's native text-selection
+   * highlight (::selection) matches this app's own established "this is
+   * selected" visual language, rather than the browser's own
+   * theme-unaware default (typically a jarring blue). Same timing
+   * requirement as _sampleDetailsTextStyle: the row must already be
+   * genuinely attached — renderList (which builds it) always runs before
+   * renderViewer (which calls this) in the same synchronous pass, so
+   * that's satisfied by construction, not by luck.
+   *
+   * background-color and color are deliberately sampled from two
+   * DIFFERENT elements, not one: .entry.selected itself sets background
+   * directly, but does NOT set color — this app's own CSS puts that on
+   * the .entry-name child instead, and deliberately sets it to the exact
+   * same value unselected text already has (see that rule's own comment
+   * — avoiding folder-blue text staying blue once selected). Sampled
+   * explicitly here anyway rather than just reusing the already-sampled
+   * body text color: today they're guaranteed identical, but if this
+   * app's own selected-text-color design ever changes, this should pick
+   * that up automatically rather than silently drifting out of sync.
+   *
+   * Returns null if either piece can't be found (shouldn't happen given
+   * the render ordering above, but degrades gracefully — the iframe's
+   * text selection just uses the browser default, same as before this
+   * existed — rather than throwing if it somehow does).
+   */
+  function _sampleSelectionColors(side) {
+    const row = document.querySelector(`#panel-${side} .entry.selected`);
+    if (!row) return null;
+    const nameEl = row.querySelector('.entry-name');
+    if (!nameEl) return null;
+    return {
+      backgroundColor: getComputedStyle(row).backgroundColor,
+      color: getComputedStyle(nameEl).color,
+    };
+  }
+
   function _kv(label, value, rowClass) {
     const tr = document.createElement('tr');
     if (rowClass) tr.className = rowClass;
@@ -1421,7 +1460,7 @@
    * WS-result/renderViewer() path, same architecture as the size-
    * calculation row above.
    */
-  function _renderViewerExtraction(side, entry, details, textStyle) {
+  function _renderViewerExtraction(side, entry, details, textStyle, selectionStyle) {
     const frag = document.createDocumentFragment();
     const plan = _computeExtractionPlan(entry, details);
     if (!plan) return frag; // registry not loaded yet, or (shouldn't happen) nothing matched at all
@@ -1498,7 +1537,7 @@
     if (visibleTabs.length <= 1) tabsRow.classList.add('viewer-extraction-tabs-hidden');
     wrap.appendChild(tabsRow);
 
-    wrap.appendChild(_renderViewerExtractionBody(state, textStyle));
+    wrap.appendChild(_renderViewerExtractionBody(state, textStyle, selectionStyle));
     frag.appendChild(wrap);
     return frag;
   }
@@ -1528,7 +1567,7 @@
     return row;
   }
 
-  function _renderViewerExtractionBody(state, textStyle) {
+  function _renderViewerExtractionBody(state, textStyle, selectionStyle) {
     const body = document.createElement('div');
     body.className = 'viewer-extraction-body';
 
@@ -1553,7 +1592,7 @@
     const iframe = document.createElement('iframe');
     iframe.className = 'viewer-extraction-frame';
     iframe.setAttribute('sandbox', 'allow-scripts'); // allow-same-origin is NEVER added — see the architecture discussion
-    iframe.srcdoc = S.composeIframeDocument(job.html, textStyle);
+    iframe.srcdoc = S.composeIframeDocument(job.html, textStyle, selectionStyle);
     body.appendChild(iframe);
     return body;
   }
