@@ -1600,21 +1600,30 @@ describe('composeIframeDocument', () => {
     assert.ok(styleIndex < headCloseIndex, 'style block should still be inside <head>');
   });
 
-  test('without a textStyle, no style block is emitted at all (unchanged from before this existed)', () => {
-    const doc = S.composeIframeDocument('<p>x</p>');
-    assert.doesNotMatch(doc, /<style>/);
+  test('the base html,body height:100% rule is always emitted, with or without a textStyle', () => {
+    const withTextStyle = S.composeIframeDocument('<p>x</p>', { color: 'red', fontFamily: 'monospace', fontSize: '12px' });
+    const withoutTextStyle = S.composeIframeDocument('<p>x</p>');
+    assert.match(withTextStyle, /<style>html,body\{height:100%;margin:0;\}<\/style>/);
+    assert.match(withoutTextStyle, /<style>html,body\{height:100%;margin:0;\}<\/style>/);
   });
 
-  test('a textStyle missing any one of color/fontFamily/fontSize is treated as absent — no partial style block', () => {
+  test('without a textStyle, no THEME (color/font) style rule is emitted — only the always-present base rule', () => {
+    const doc = S.composeIframeDocument('<p>x</p>');
+    assert.doesNotMatch(doc, /color:/);
+    assert.doesNotMatch(doc, /font-family:/);
+  });
+
+  test('a textStyle missing any one of color/fontFamily/fontSize is treated as absent — no partial theme style rule', () => {
     const doc1 = S.composeIframeDocument('<p>x</p>', { color: 'red', fontFamily: 'monospace' }); // no fontSize
     const doc2 = S.composeIframeDocument('<p>x</p>', { fontFamily: 'monospace', fontSize: '12px' }); // no color
-    assert.doesNotMatch(doc1, /<style>/);
-    assert.doesNotMatch(doc2, /<style>/);
+    assert.doesNotMatch(doc1, /color:/);
+    assert.doesNotMatch(doc2, /color:/);
   });
 
   test('null textStyle behaves the same as omitting it', () => {
     const doc = S.composeIframeDocument('<p>x</p>', null);
-    assert.doesNotMatch(doc, /<style>/);
+    assert.doesNotMatch(doc, /color:/);
+    assert.doesNotMatch(doc, /font-family:/);
   });
 });
 

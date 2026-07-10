@@ -1165,19 +1165,33 @@ function siblingMediaRendererName(name) {
  * style block — extractor output still renders, using browser defaults,
  * same as before this existed.
  *
+ * Always emits one base rule regardless of textStyle: `html,body{height:
+ * 100%;margin:0;}`. Without it, an extractor's own height:100% (e.g.
+ * image-extractor's flex-centering wrapper around its thumbnail) has
+ * nothing meaningful to compute against — a percentage height against an
+ * ancestor whose own height is auto (unset) is ignored per the CSS spec,
+ * not just quietly wrong, since <body>'s default height is always auto
+ * unless something says otherwise. This establishes that real, non-auto
+ * chain once, here, so every extractor's own percentage-based sizing
+ * actually works as written rather than each one needing to somehow
+ * establish it independently. margin:0 removes body's default margin,
+ * which would otherwise make even a correctly-100%-tall body slightly
+ * taller than the iframe's own viewport and force an unwanted scrollbar.
+ *
  * @param {string} bodyHtml — the extractor's own HTML output, verbatim
  * @param {{color:string, fontFamily:string, fontSize:string}} [textStyle]
  * @returns {string} a complete HTML document string, ready for `srcdoc`
  */
 function composeIframeDocument(bodyHtml, textStyle) {
-  const style = (textStyle && textStyle.color && textStyle.fontFamily && textStyle.fontSize)
+  const baseStyle = '<style>html,body{height:100%;margin:0;}</style>';
+  const themeStyle = (textStyle && textStyle.color && textStyle.fontFamily && textStyle.fontSize)
     ? `<style>body{color:${textStyle.color};font-family:${textStyle.fontFamily};font-size:${textStyle.fontSize};}</style>`
     : '';
   return (
     '<!DOCTYPE html><html><head><meta charset="utf-8">' +
     '<meta http-equiv="Content-Security-Policy" content="' +
     "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:;" +
-    '">' + style + '</head><body>' + (bodyHtml || '') + '</body></html>'
+    '">' + baseStyle + themeStyle + '</head><body>' + (bodyHtml || '') + '</body></html>'
   );
 }
 
