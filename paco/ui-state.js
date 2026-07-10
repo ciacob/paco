@@ -429,6 +429,28 @@ function fmtSizeVerbose(bytes) {
 }
 
 /**
+ * Consistent, human-readable "file too large" error message — reused by
+ * every F3 extractor that enforces a max-file-size limit (generic, image,
+ * media, text). Previously each one independently built its own raw-
+ * byte-count string ("File is 27384126 bytes, exceeding the 5242880-byte
+ * limit.") — four separate copies of the same wording, with no shared
+ * source of truth, and numbers nobody actually reads as bytes at that
+ * scale. One function, reused via require('../../../ui-state') from
+ * each extractor's own src/ — a deliberate, small, well-justified
+ * exception to extractors otherwise being standalone/self-contained
+ * packages: fmtSize is a pure string formatter with no DOM/IO coupling,
+ * and the alternative (four drifting copies of the same message) is
+ * worse than the one added dependency.
+ *
+ * @param {number} actualBytes
+ * @param {number} limitBytes
+ * @returns {string}
+ */
+function formatFileTooLargeError(actualBytes, limitBytes) {
+  return `File too large: ${fmtSize(actualBytes)} exceeds the ${fmtSize(limitBytes)} limit.`;
+}
+
+/**
  * Format a millisecond timestamp for display.
  * @param {number} ms
  * @returns {string}
@@ -1213,6 +1235,7 @@ const uiState = {
   nextSortState,
   fmtSize,
   fmtSizeVerbose,
+  formatFileTooLargeError,
   fmtDate,
   shortenPath,
   basenameSelectionEnd,

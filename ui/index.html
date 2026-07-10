@@ -392,6 +392,11 @@
     .column-info {
       max-width: 100%;
     }
+    /* Now applied to a <summary> element (see _renderViewerColumn), not a
+       plain <div> — its own disclosure marker is left as-is (a fine,
+       recognizable affordance for "this collapses"), but cursor:pointer
+       is set explicitly rather than relying on the browser default, to
+       reliably signal the trigger regardless of that. */
     .viewer-column-location {
       font-size: 11px;
       font-weight: 600;
@@ -401,6 +406,14 @@
       margin-bottom: 8px;
       padding-bottom: 4px;
       border-bottom: 1px solid var(--border);
+      cursor: pointer;
+    }
+    /* Defensive reset only — some browsers give <details> its own default
+       margin; nothing else about its box model needs changing, since its
+       content (table or multi-section content) already carries its own
+       spacing. */
+    .viewer-column-details {
+      margin: 0;
     }
     /* Vertical-header detail table — labels right-aligned, values left-
        aligned, per the spec. Used for both single- and multi-selection
@@ -588,17 +601,16 @@
     }
     .viewer-tab:hover { background: var(--bg3); color: var(--text); }
     .viewer-tab.active { background: var(--active-tab); color: var(--text); font-weight: 600; }
-    /* min-height:120px is an UNRELATED, existing floor for the spinner/
-       error cases (so this doesn't collapse to near-zero while showing
-       just a small spinner or message) — untouched by flex-grow:1 below,
-       which only ever ADDS height beyond whatever this would otherwise
-       be, consuming whatever spare height .viewer-extraction was just
-       given rather than leaving it unused. */
+    /* No min-height here — the spinner/error states are small, simple
+       content (a 20px spinner, a line of text) that don't need a
+       protected minimum area the way the iframe does; flex-grow:1 still
+       expands this to fill whatever spare height .viewer-extraction was
+       given when there's room, this just no longer forces extra height
+       in the opposite (cramped panel) case where there isn't. */
     .viewer-extraction-body {
       display: flex;
       align-items: center;
       justify-content: center;
-      min-height: 120px;
       width: 100%;
       flex-grow: 1;
     }
@@ -606,12 +618,14 @@
        now has (only the iframe — the spinner and error message are
        plain siblings under the SAME body and keep the default centered,
        intrinsic-size behavior, since neither of them should stretch).
-       min-height:320px remains a genuine floor either way: stretch can
-       only grow this PAST 320px when there's room, never shrink it
-       below — exactly "keep today's minimum, grow when there's space". */
+       min-height:180px remains a genuine floor either way: stretch can
+       only grow this PAST 180px when there's room, never shrink it
+       below — exactly "keep this minimum, grow when there's space". Low
+       enough that the iframe stays visible without forcing a scrollbar
+       even at the horizontal divider's own minimum allowance. */
     .viewer-extraction-frame {
       width: 100%;
-      min-height: 320px;
+      min-height: 180px;
       border: 1px solid var(--border);
       border-radius: 4px;
       background: var(--bg2);

@@ -45,6 +45,9 @@
  * HEIC fixture).
  */
 
+// A small, deliberate exception to extractors otherwise being standalone
+// packages — see formatFileTooLargeError's own comment in ui-state.js.
+const { formatFileTooLargeError } = require('../../../ui-state');
 const sharp = require('sharp');
 const libheif = require('libheif-js/wasm-bundle');
 
@@ -342,10 +345,14 @@ async function heicThumbnail(buffer, cfg, deps) {
   }
 
   // Checked before allocating the RGBA buffer or calling display(), which
-  // is the expensive step this guard is meant to avoid triggering.
+  // is the expensive step this guard is meant to avoid triggering. Kept
+  // as its own message, not routed through formatFileTooLargeError — this
+  // limit is measured in pixels, not bytes, so fmtSize's units don't
+  // apply; only the "File too large:" prefix is shared, for consistency
+  // with every other too-large message an extractor can emit.
   if (width * height > cfg.limitInputPixels) {
     const err = new Error(
-      `HEIC/HEIF image is ${width}x${height} (${width * height} pixels), exceeding the ${cfg.limitInputPixels}-pixel limit.`
+      `File too large: HEIC/HEIF image is ${width}x${height} (${width * height} pixels), exceeding the ${cfg.limitInputPixels}-pixel limit.`
     );
     err.code = ErrorCode.TOO_MANY_PIXELS;
     throw err;
@@ -425,10 +432,7 @@ async function getImageThumbnail(fileContent, fileType, config = {}, deps = {}) 
   }
 
   if (buffer.byteLength > cfg.maxFileSizeBytes) {
-    return failure(
-      ErrorCode.TOO_LARGE,
-      `File is ${buffer.byteLength} bytes, exceeding the ${cfg.maxFileSizeBytes}-byte limit.`
-    );
+    return failure(ErrorCode.TOO_LARGE, formatFileTooLargeError(buffer.byteLength, cfg.maxFileSizeBytes));
   }
 
   try {

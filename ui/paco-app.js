@@ -516,6 +516,23 @@
     right: _makeLoggedViewerRefresh('right'),
   };
 
+  // Per-side, in-memory only (no localStorage, no server persistence) —
+  // whether the "Selection Details" section (everything below the
+  // "Left/Right panel selection" header — the table for a single
+  // selection, or the counts/recent/size sections for a multi-selection)
+  // is collapsed via its own <details> element. Lives here, outside the
+  // DOM, deliberately: renderViewer() rebuilds this whole subtree from
+  // scratch on every render, so a fresh <details> element has no memory
+  // of its own — without tracking this separately, the collapsed state
+  // would silently reset back open on the very next re-render. Tied to
+  // the SIDE, not the specific file/folder selected there — collapsing
+  // it is a "keep this out of my way while I browse" preference, not
+  // something that should reset every time the selection changes.
+  // Defaults to expanded (false) on both sides — this is new behavior,
+  // so starting identical to how the Viewer already looked is the least
+  // surprising rollout.
+  const _tableCollapsed = { left: false, right: false };
+
   // Per-side cache of the async enrichment (kind label, owner, permissions)
   // fetched by viewer-details.js for the current single-selection item, so
   // a re-render (e.g. triggered by the OTHER panel's selection changing)
@@ -1238,8 +1255,18 @@
    * renderViewer()'s own two-pass comment for why that has to happen
    * later, once this column's own table is actually live.
    *
+   * The Details content itself (table for single-selection, or the
+   * counts/recent/size sections for multi-selection) is wrapped in a
+   * <details> element, with the "Left/Right panel selection" header as
+   * its <summary> — collapsible, per-side collapsed state tracked in
+   * _tableCollapsed (see its own comment for why that has to live
+   * outside the DOM).
+   *
    * @returns {{ columnEl: HTMLElement, infoEl: HTMLElement }} — infoEl is
    *   where the second pass will append the extraction block, once ready.
+   *   Note infoEl is the OUTER .column-info wrapper, not the <details>
+   *   itself — the extraction block stays a sibling of the whole
+   *   collapsible section, not something that collapses along with it.
    */
   function _renderViewerColumn(col) {
     const column = document.createElement('div');
@@ -1248,17 +1275,33 @@
     const info = document.createElement('div');
     info.className = 'column-info';
 
-    const location = document.createElement('div');
-    location.className = 'viewer-column-location';
-    location.textContent = `${col.side === 'left' ? 'Left' : 'Right'} panel selection`;
-    info.appendChild(location);
+    const details = document.createElement('details');
+    details.className = 'viewer-column-details';
+    // Set BEFORE attaching the 'toggle' listener below — setting .open
+    // programmatically fires 'toggle' too, same as a real click does.
+    // Attaching the listener first would make this very line immediately
+    // re-fire it, harmlessly writing the same value straight back to
+    // _tableCollapsed — but redundant, and confusing to read later.
+    // Setting it first means the listener only ever fires for genuine
+    // user clicks.
+    details.open = !_tableCollapsed[col.side];
+
+    const summary = document.createElement('summary');
+    summary.className = 'viewer-column-location';
+    summary.textContent = `${col.side === 'left' ? 'Left' : 'Right'} panel selection`;
+    details.appendChild(summary);
 
     if (col.kind === 'single') {
-      info.appendChild(_renderViewerSingle(col));
+      details.appendChild(_renderViewerSingle(col));
     } else {
-      info.appendChild(_renderViewerMulti(col));
+      details.appendChild(_renderViewerMulti(col));
     }
 
+    details.addEventListener('toggle', () => {
+      _tableCollapsed[col.side] = !details.open;
+    });
+
+    info.appendChild(details);
     column.appendChild(info);
     return { columnEl: column, infoEl: info };
   }

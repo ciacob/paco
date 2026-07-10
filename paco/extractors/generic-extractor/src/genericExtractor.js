@@ -1,5 +1,11 @@
 'use strict';
 
+// A small, deliberate exception to this extractor's own "zero runtime
+// deps" — see formatFileTooLargeError's own comment in ui-state.js for
+// why: a pure string formatter, no DOM/IO coupling, reused instead of
+// duplicating the same "too large" message independently here.
+const { formatFileTooLargeError } = require('../../../ui-state');
+
 /**
  * generic-extractor
  *
@@ -717,7 +723,7 @@ function getGenericPreview(fileContent, isText, config = {}) {
   }
 
   if (buffer.byteLength > cfg.maxFileSizeBytes) {
-    return failure(ErrorCode.TOO_LARGE, `File is ${buffer.byteLength} bytes, exceeding the ${cfg.maxFileSizeBytes}-byte limit.`);
+    return failure(ErrorCode.TOO_LARGE, formatFileTooLargeError(buffer.byteLength, cfg.maxFileSizeBytes));
   }
 
   try {

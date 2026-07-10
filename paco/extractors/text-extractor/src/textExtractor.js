@@ -36,6 +36,9 @@
  * in isolation (e.g. swap in a fake officeParser that throws).
  */
 
+// A small, deliberate exception to extractors otherwise being standalone
+// packages — see formatFileTooLargeError's own comment in ui-state.js.
+const { formatFileTooLargeError } = require('../../../ui-state');
 const sanitizeHtml = require('sanitize-html');
 const { marked } = require('marked');
 const officeParser = require('officeparser');
@@ -161,10 +164,7 @@ async function getDocumentPreview(fileContent, fileType, config = {}, deps = {})
   }
 
   if (buffer.byteLength > cfg.maxFileSizeBytes) {
-    return failure(
-      ErrorCode.TOO_LARGE,
-      `File is ${buffer.byteLength} bytes, exceeding the ${cfg.maxFileSizeBytes}-byte limit.`
-    );
+    return failure(ErrorCode.TOO_LARGE, formatFileTooLargeError(buffer.byteLength, cfg.maxFileSizeBytes));
   }
 
   try {

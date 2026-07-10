@@ -635,6 +635,30 @@ describe('fmtSizeVerbose', () => {
   });
 });
 
+// ─── formatFileTooLargeError ───────────────────────────────────────────────────
+
+describe('formatFileTooLargeError', () => {
+  test('formats both the actual size and the limit via fmtSize, with the "File too large:" prefix', () => {
+    assert.equal(
+      S.formatFileTooLargeError(27384126, 5242880),
+      'File too large: 26.1 M exceeds the 5.0 M limit.'
+    );
+  });
+
+  test('small sizes stay in bytes, matching fmtSize\'s own behavior', () => {
+    assert.equal(
+      S.formatFileTooLargeError(800, 512),
+      'File too large: 800 B exceeds the 512 B limit.'
+    );
+  });
+
+  test('uses fmtSize, not fmtSizeVerbose — compact units, no parenthesized exact byte count', () => {
+    const msg = S.formatFileTooLargeError(27384126, 5242880);
+    assert.doesNotMatch(msg, /Bytes/);
+    assert.doesNotMatch(msg, /\(/);
+  });
+});
+
 // ─── fmtDate ──────────────────────────────────────────────────────────────────
 
 describe('fmtDate', () => {

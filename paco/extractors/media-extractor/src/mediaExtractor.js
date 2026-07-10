@@ -36,6 +36,9 @@
  *   { kind: null, metadata: null, items: null, html: null, error: { code, message } }
  */
 
+// A small, deliberate exception to extractors otherwise being standalone
+// packages — see formatFileTooLargeError's own comment in ui-state.js.
+const { formatFileTooLargeError } = require('../../../ui-state');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
@@ -327,18 +330,46 @@ function metadataTableHtml(metadata) {
   return `<table><tbody>${rows}</tbody></table>`;
 }
 
+/**
+ * The outer wrapper's align-items:center (the row-direction cross axis,
+ * i.e. vertical) is deliberately OMITTED, not just left at its default —
+ * this composes with the iframe shell's own html,body{height:100%} (see
+ * ui-state.js's composeIframeDocument): once that wrapper has a REAL,
+ * bounded height instead of growing to fit content, align-items:center
+ * on overflowing content centers the OVERFLOW too, symmetrically clipping
+ * both the top of the first frame row and the bottom of the last one —
+ * with no scrollbar to reach either. Its default, stretch, instead lets
+ * content start flush at the top, so it only ever gets cut off (if at
+ * all) at the bottom, once it genuinely runs past the available height.
+ *
+ * Each frame's <img> uses width="100%" height="100%" rather than its own
+ * real pixel dimensions — not because that percentage resolves cleanly
+ * (the containing <figure> has no explicit size of its own to resolve
+ * against, same reasoning as composeIframeDocument's own fix), but
+ * because width and height behave asymmetrically here: a flex item's
+ * width defaults to filling available space and shrinks under
+ * flex-shrink when there isn't enough (never growing past its own
+ * natural size, since flex-grow is never set), so width="100%" tracks
+ * whatever width flexbox actually gives the image. height="100%" doesn't
+ * resolve as a percentage at all — for a replaced element with a known
+ * intrinsic ratio, an unresolvable percentage height falls back to
+ * height:auto, which then scales proportionally to whatever width was
+ * just resolved. Net effect: frames shrink together to fit when there
+ * isn't room for all of them at natural size, never distort, and never
+ * upscale past their real dimensions.
+ */
 function videoHtml(items, metadata) {
   const frames = items
     .map(
       (item) =>
         `<figure style="display:flex;flex-direction:column;align-items:center;gap:4px;margin:0;">` +
-        `<img src="data:image/webp;base64,${item.thumbnail.toString('base64')}" width="${item.width}" height="${item.height}" decoding="async" style="display:block;">` +
+        `<img src="data:image/webp;base64,${item.thumbnail.toString('base64')}" width="100%" height="100%" decoding="async" style="display:block;">` +
         `<figcaption>${item.timecode}</figcaption>` +
         `</figure>`
     )
     .join('');
   return (
-    '<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;">' +
+    '<div style="display:flex;justify-content:center;width:100%;height:100%;">' +
     '<div style="display:flex;flex-direction:column;align-items:center;gap:16px;">' +
     `<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:16px;">${frames}</div>` +
     metadataTableHtml(metadata) +
@@ -347,6 +378,13 @@ function videoHtml(items, metadata) {
   );
 }
 
+// Same align-items:center omission as videoHtml, and for the identical
+// reason — see its own comment. The waveform/spectrogram image(s) here
+// already had max-width:100% (preventing horizontal overflow) but were
+// never subject to the SAME vertical symmetric-clipping risk in
+// practice (a waveform is typically wide and short, not a wrapped
+// multi-row gallery) — the align-items fix still applies defensively,
+// even though the image sizing itself didn't need videoHtml's treatment.
 function audioHtml(items, metadata) {
   const images = items
     .map(
@@ -356,7 +394,7 @@ function audioHtml(items, metadata) {
     )
     .join('');
   return (
-    '<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;">' +
+    '<div style="display:flex;justify-content:center;width:100%;height:100%;">' +
     '<div style="display:flex;flex-direction:column;align-items:center;gap:16px;">' +
     images +
     metadataTableHtml(metadata) +
@@ -396,7 +434,7 @@ async function getMediaPreview(fileContent, fileType, config = {}, deps = {}) {
   }
 
   if (buffer.byteLength > cfg.maxFileSizeBytes) {
-    return failure(ErrorCode.TOO_LARGE, `File is ${buffer.byteLength} bytes, exceeding the ${cfg.maxFileSizeBytes}-byte limit.`);
+    return failure(ErrorCode.TOO_LARGE, formatFileTooLargeError(buffer.byteLength, cfg.maxFileSizeBytes));
   }
 
   const type = normalizeFileType(fileType);

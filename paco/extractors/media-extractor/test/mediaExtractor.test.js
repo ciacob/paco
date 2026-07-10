@@ -220,7 +220,21 @@ test('videoHtml: wraps frames in figure/figcaption with centered timecodes, tabl
   assert.match(html, /<figcaption>0:03<\/figcaption>/);
   assert.match(html, /flex-wrap:wrap/);
   assert.match(html, /<table>/);
-  assert.match(html, /<img[^>]+width="100"[^>]+height="50"/);
+  // width/height are percentage-based, not the item's own real pixel
+  // dimensions — see videoHtml's own comment for why: the containing
+  // <figure> has no explicit size, but a flex item's width still
+  // genuinely shrinks under flex-shrink when there isn't room for all
+  // frames at natural size, and height="100%" falls back to auto,
+  // scaling proportionally with whatever width flexbox resolved.
+  assert.match(html, /<img[^>]+width="100%"[^>]+height="100%"/);
+});
+
+test("videoHtml: outer wrapper omits align-items:center — overflowing content shouldn't be symmetrically clipped top and bottom", () => {
+  const items = [{ label: 'frame@10%', timecode: '0:01', thumbnail: Buffer.from('x'), width: 100, height: 50 }];
+  const html = videoHtml(items, {});
+  const outerDivStyle = html.match(/<div style="([^"]*)"/)[1];
+  assert.doesNotMatch(outerDivStyle, /align-items/);
+  assert.match(outerDivStyle, /justify-content:center/); // horizontal centering is unaffected
 });
 
 test('audioHtml: stacks images with shrink-never-grow styling, table beneath', () => {
@@ -232,6 +246,14 @@ test('audioHtml: stacks images with shrink-never-grow styling, table beneath', (
   assert.match(html, /max-width:100%/);
   assert.doesNotMatch(html, /flex-wrap/);
   assert.match(html, /<table>/);
+});
+
+test('audioHtml: outer wrapper also omits align-items:center, same reasoning as videoHtml', () => {
+  const items = [{ label: 'waveform', thumbnail: Buffer.from('x'), width: 1200, height: 300 }];
+  const html = audioHtml(items, {});
+  const outerDivStyle = html.match(/<div style="([^"]*)"/)[1];
+  assert.doesNotMatch(outerDivStyle, /align-items/);
+  assert.match(outerDivStyle, /justify-content:center/);
 });
 
 // ---------------------------------------------------------------------------
