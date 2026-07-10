@@ -1,11 +1,10 @@
 {
   "name": "Thumbnail",
-  "description": "Renders a rasterized SVG thumbnail via image-extractor — the sibling of thumbnail/renderer.json, split out because file-type detects SVG's signature as generic application/xml (confirmed empirically) rather than an image/* MIME, which classifies it binary_category \"other\" rather than \"image\" under this project's existing MIME-category classifier. Same tab name, same underlying extractor as thumbnail — this manifest exists only because of that classification quirk, not because SVG renders any differently once matched.",
+  "description": "Renders a rasterized SVG thumbnail via image-extractor — same tab name, same underlying extractor as thumbnail/renderer.json, still a separate manifest because file_type \"svg\" needs to live somewhere distinct from that one's own raster-format list. file_mode \"any\" (not \"binary\") is the real reason this needs its own manifest now, though: SVG is genuinely both real text content and a rasterizable image at once (isTextual is now content-sniff-only — see file-handler-detect.js — so a .svg file always lands as fileMode 'text', consistently, regardless of whether file-type's signature-based MIME detection happens to recognise it). \"any\" lets this match regardless of that, so both the raw-text tab and this thumbnail are always offered together for every SVG. No binary_category — deliberately forbidden by the schema for \"any\" renderers, since fileMode isn't consulted at all here to begin with.",
   "uid": "2f9ce08d-f069-403a-9375-335e5a8ad4a9",
   "abilities": {
     "selection_type": "single",
-    "file_mode": "binary",
-    "binary_category": "other",
+    "file_mode": "any",
     "file_type": "svg"
   }
 }

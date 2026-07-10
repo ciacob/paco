@@ -66,8 +66,14 @@ module.exports = {
     let mime = null;
     let isTextual = null;
     if (entry.type === 'file') {
-      mime = await detect.detectMime(targetPath);
-      isTextual = mime ? false : await detect.detectIsTextual(targetPath);
+      // Run in parallel — both are unconditionally needed now (isTextual no
+      // longer depends on mime's result; see file-handler-detect.js's own
+      // comments for why), so there's no reason to wait on one before
+      // starting the other.
+      [mime, isTextual] = await Promise.all([
+        detect.detectMime(targetPath),
+        detect.detectIsTextual(targetPath),
+      ]);
       kindLabel = uiState.viewerKindLabel(isTextual, mime, path.extname(targetPath));
     }
 

@@ -185,6 +185,13 @@ describe('renderer.schema.json — enum constraints', () => {
     }), false);
   });
 
+  test('accepts file_mode "any" — the waiver value, alongside the existing "text"/"binary"', () => {
+    assert.ok(isValid({
+      name: 'x', description: 'x', uid: UID_A,
+      abilities: { selection_type: 'single', file_mode: 'any', file_type: 'svg' },
+    }));
+  });
+
   test('rejects an invalid binary_category value', () => {
     assert.equal(isValid({
       name: 'x', description: 'x', uid: UID_A,
@@ -202,7 +209,7 @@ describe('renderer.schema.json — enum constraints', () => {
   });
 });
 
-describe('renderer.schema.json — the text/binary_category prohibition', () => {
+describe('renderer.schema.json — the binary_category prohibition (forbidden except under file_mode "binary")', () => {
   test('rejects binary_category declared alongside file_mode "text"', () => {
     assert.equal(isValid({
       name: 'x', description: 'x', uid: UID_A,
@@ -210,10 +217,24 @@ describe('renderer.schema.json — the text/binary_category prohibition', () => 
     }), false);
   });
 
+  test('rejects binary_category declared alongside file_mode "any" — the same prohibition applies, not just "text"', () => {
+    assert.equal(isValid({
+      name: 'x', description: 'x', uid: UID_A,
+      abilities: { selection_type: 'single', file_mode: 'any', file_type: 'svg', binary_category: 'other' },
+    }), false);
+  });
+
   test('binary_category is fine alongside file_mode "binary"', () => {
     assert.ok(isValid({
       name: 'x', description: 'x', uid: UID_A,
       abilities: { selection_type: 'single', file_mode: 'binary', binary_category: 'image' },
+    }));
+  });
+
+  test('file_mode "any" without binary_category is fine — mirrors the real thumbnail-svg/renderer.json shape', () => {
+    assert.ok(isValid({
+      name: 'x', description: 'x', uid: UID_A,
+      abilities: { selection_type: 'single', file_mode: 'any', file_type: 'svg' },
     }));
   });
 });

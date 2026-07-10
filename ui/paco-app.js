@@ -597,6 +597,19 @@
    * registry hasn't loaded yet, or if somehow nothing matched at all (the
    * base-per-file_mode invariant registry.js enforces server-side means
    * this shouldn't happen in practice).
+   *
+   * Used to special-case SVG here, ahead of the normal matchRenderers
+   * path — that's gone now, resolved at the source instead. Two things
+   * both had to change: isTextual is now content-sniff-only (see
+   * file-handler-detect.js), so a .svg file consistently lands as
+   * fileMode 'text' regardless of whether file-type's signature
+   * detection happens to recognise it; and thumbnail-svg/renderer.json
+   * now declares file_mode "any" rather than "binary" — a genuine waiver
+   * for renderers whose subject matter is really both text and binary at
+   * once, not a fileMode a selection can ever itself have — so it keeps
+   * matching a 'text'-mode SVG selection without needing text mode to
+   * generally admit binary-category renderers. Together, the plain path
+   * below now returns both tabs for every SVG on its own.
    */
   function _computeExtractionPlan(entry, details) {
     if (!_rendererRegistry) return null;

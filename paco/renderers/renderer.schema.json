@@ -34,13 +34,13 @@
         },
         "file_mode": {
           "type": "string",
-          "enum": ["text", "binary"],
-          "description": "Whether this renderer applies to text or binary content, per the existing on-prem text/binary classification (paco/file-handler-detect.js). Exact match required, same as selection_type."
+          "enum": ["text", "binary", "any"],
+          "description": "Whether this renderer applies to text or binary content, per the existing on-prem text/binary classification (paco/file-handler-detect.js) — or \"any\" to match regardless of that classification. \"any\" is a deliberate waiver, not a default/fallback: it exists for renderers whose subject matter is genuinely both at once (SVG being the first case — real, meaningful text content AND a rasterizable image, not \"we don't know which\" the way ambiguous media is). matcher.js's gate skips the file_mode comparison entirely for \"any\" — only selection_type (and file_type, for specificity) still apply. \"text\"/\"binary\" still require an exact match, same as before."
         },
         "binary_category": {
           "type": "string",
           "enum": ["image", "audio", "video", "other"],
-          "description": "Generic binary sub-category this renderer handles (rung-2 / generic-category matching — see matcher.js). Only meaningful when file_mode is \"binary\"; forbidden when file_mode is \"text\" — see the file_mode/binary_category conditional below. May coexist with file_type, in which case it is purely informational and plays no role in matching (a renderer with file_type is always a rung-1 match, never additionally offered as a rung-2 match)."
+          "description": "Generic binary sub-category this renderer handles (rung-2 / generic-category matching — see matcher.js). Only meaningful when file_mode is \"binary\"; forbidden when file_mode is \"text\" or \"any\" — see the file_mode/binary_category conditional below. \"any\" renderers don't consult binary_category at all (the whole point is not caring what fileMode the selection landed in), so declaring one would be misleading rather than just unused. May coexist with file_type, in which case it is purely informational and plays no role in matching (a renderer with file_type is always a rung-1 match, never additionally offered as a rung-2 match)."
         },
         "file_type": {
           "description": "Specific file type(s) this renderer handles (rung-1 / file-specific matching). Either a single non-empty string (e.g. \"png\", \"md\") or a non-empty array of such strings for a closely-related family (e.g. [\"jpeg\",\"jpg\",\"png\",\"gif\"]). A renderer declaring exactly one string here is treated as more specific than one declaring an array, for preselection purposes — see matcher.js's preselection priority order. Legal under both file_mode \"text\" and \"binary\" — there is no requirement to also declare binary_category alongside it (e.g. a markdown renderer needs only file_mode:\"text\" + file_type:\"md\").",
@@ -64,10 +64,12 @@
       },
       "allOf": [
         {
-          "$comment": "binary_category is forbidden under file_mode \"text\" — by design, never supported (e.g. SVG is text but conventionally image-like; this is a deliberate, accepted gap rather than something the schema bends to accommodate).",
+          "$comment": "binary_category is forbidden except under file_mode \"binary\" — i.e. also forbidden for \"any\", not just \"text\". SVG (text content, but conventionally image-like) used to be cited here as a deliberate, accepted gap this schema wasn't going to bend for — it's exactly what \"any\" was added to solve instead (see thumbnail-svg/renderer.json), so that framing no longer applies; this comment is now just explaining the conditional itself.",
           "if": {
-            "properties": { "file_mode": { "const": "text" } },
-            "required": ["file_mode"]
+            "not": {
+              "properties": { "file_mode": { "const": "binary" } },
+              "required": ["file_mode"]
+            }
           },
           "then": {
             "properties": { "binary_category": false }

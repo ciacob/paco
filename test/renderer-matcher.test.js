@@ -59,6 +59,12 @@ const genericAudio = {
   name: 'generic-audio', uid: 'generic-audio',
   abilities: { selection_type: 'single', file_mode: 'binary', binary_category: 'audio' },
 };
+// Mirrors the real thumbnail-svg/renderer.json shape — file_mode "any",
+// no binary_category (forbidden by the schema for "any" renderers).
+const svgThumbnail = {
+  name: 'svg-thumbnail', uid: 'svg-thumbnail',
+  abilities: { selection_type: 'single', file_mode: 'any', file_type: 'svg' },
+};
 
 // ─── Gate (selection_type + file_mode) ───────────────────────────────────────
 
@@ -86,6 +92,43 @@ describe('matchRenderers — gate', () => {
     const wrongMode = { name: 'wrong-mode', uid: 'x', abilities: { selection_type: 'single', file_mode: 'text' } };
     const r = matchRenderers(sel({ selectionType: 'single', fileMode: 'binary' }), [wrongMode]);
     assert.deepEqual(r.tabs, []);
+  });
+});
+
+// ─── Gate waiver: file_mode "any" ─────────────────────────────────────────────
+
+describe('matchRenderers — file_mode "any" waiver', () => {
+  test('an "any" renderer matches a text-mode selection', () => {
+    const r = matchRenderers(sel({ fileMode: 'text', fileType: 'svg' }), [baseText, svgThumbnail]);
+    assert.deepEqual(r.tabs.map(t => t.name).sort(), ['generic-text', 'svg-thumbnail']);
+  });
+
+  test('the SAME "any" renderer also matches a binary-mode selection — it genuinely ignores fileMode, not just "text"', () => {
+    const r = matchRenderers(sel({ fileMode: 'binary', fileType: 'svg' }), [baseBinary, svgThumbnail]);
+    assert.deepEqual(r.tabs.map(t => t.name).sort(), ['generic-binary', 'svg-thumbnail']);
+  });
+
+  test('an "any" renderer is preselected over the base, same specificity rules as any other rung-1 match', () => {
+    const r = matchRenderers(sel({ fileMode: 'text', fileType: 'svg' }), [baseText, svgThumbnail]);
+    assert.equal(r.preselected.name, 'svg-thumbnail');
+  });
+
+  test('an "any" renderer still requires its own file_type to match — not a blanket match for every selection', () => {
+    const r = matchRenderers(sel({ fileMode: 'text', fileType: 'md' }), [baseText, svgThumbnail]);
+    assert.deepEqual(r.tabs.map(t => t.name), ['generic-text']); // svgThumbnail excluded — file_type "svg" doesn't include "md"
+  });
+
+  test('selection_type still gates an "any" renderer normally — the waiver is only about file_mode', () => {
+    const multiOnlyAny = { name: 'multi-any', uid: 'x', abilities: { selection_type: 'multi', file_mode: 'any', file_type: 'svg' } };
+    const r = matchRenderers(sel({ selectionType: 'single', fileMode: 'text', fileType: 'svg' }), [multiOnlyAny]);
+    assert.deepEqual(r.tabs, []);
+  });
+
+  test('an "any" renderer with no file_type would be treated as a base — not exercised by the real registry, but the algorithm should not crash on it', () => {
+    const anyBase = { name: 'any-base', uid: 'x', abilities: { selection_type: 'single', file_mode: 'any' } };
+    const r = matchRenderers(sel({ fileMode: 'text' }), [anyBase]);
+    assert.deepEqual(r.tabs.map(t => t.name), ['any-base']);
+    assert.equal(r.preselected.name, 'any-base');
   });
 });
 

@@ -12,9 +12,13 @@
  * ─── The algorithm ──────────────────────────────────────────────────────────
  *
  * 1. GATE — a renderer only participates at all if its abilities.selection_type
- *    and abilities.file_mode exactly equal the selection's own values.
- *    Renderers failing this gate are excluded entirely, before any rung
- *    matching even runs.
+ *    exactly equals the selection's own selectionType, AND either its
+ *    abilities.file_mode exactly equals the selection's own fileMode, OR
+ *    the renderer declares file_mode "any" (a waiver — see
+ *    renderer.schema.json for what that's actually for; it's not a third
+ *    value the selection itself can ever have, only something a renderer
+ *    can opt into). Renderers failing this gate are excluded entirely,
+ *    before any rung matching even runs.
  *
  * 2. RUNG 1 (file-specific) — among gated renderers, those whose
  *    abilities.file_type (a string OR an array of strings) includes the
@@ -68,7 +72,7 @@
  * @property {string} uid
  * @property {Object} abilities
  * @property {'single'|'multi'} abilities.selection_type
- * @property {'text'|'binary'}  abilities.file_mode
+ * @property {'text'|'binary'|'any'}  abilities.file_mode
  * @property {string}           [abilities.binary_category]
  * @property {string|string[]}  [abilities.file_type]
  */
@@ -106,8 +110,15 @@ function matchRenderers(selection, renderers) {
  */
 function _passesGate(renderer, selection) {
   const a = renderer.abilities || {};
-  return a.selection_type === selection.selectionType
-      && a.file_mode === selection.fileMode;
+  if (a.selection_type !== selection.selectionType) return false;
+  // "any" is a waiver, not a third selection value to match exactly —
+  // see renderer.schema.json's own comment on why it exists (a renderer
+  // whose subject matter is genuinely both text and binary at once, e.g.
+  // SVG, rather than "we don't know which"). The selection's own fileMode
+  // is still always concretely 'text' or 'binary' — only a renderer can
+  // ever declare 'any'.
+  if (a.file_mode === 'any') return true;
+  return a.file_mode === selection.fileMode;
 }
 
 /**

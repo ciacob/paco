@@ -1980,7 +1980,32 @@ describe('viewer-details task', () => {
     assert.ok(ok);
     assert.equal(result.kindLabel, 'binary \u2014 image/png file');
     assert.equal(result.mime, 'image/png');
-    assert.equal(result.isTextual, false, 'mime found -> forced non-textual, per file-handler-detect.js');
+    // isTextual no longer depends on mime at all (see file-handler-detect.js's
+    // own comment) — this is still correctly false, but now via the content
+    // sniff independently detecting this fixture's 20 zero-padding bytes,
+    // not because a mime was found.
+    assert.equal(result.isTextual, false, 'content-sniff independently detects the NUL-byte padding in this fixture');
+  });
+
+  test('isTextual is no longer forced false just because a mime was found — the actual SVG-inconsistency fix, at the task level', async () => {
+    // An SVG WITH an XML prolog: file-type finds a real application/xml
+    // match (see file-handler-detect.test.js for direct confirmation of
+    // that), but the content itself is genuinely, entirely text — before
+    // this change, mime being truthy would have forced isTextual:false
+    // here regardless; now the content-sniff is the sole authority and
+    // correctly says true.
+    const target = path.join(workDir, 'with-prolog.svg');
+    await mkfile(target, '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>\n');
+    purgeCache('worker/tasks/viewer-details');
+    purgeCache('paco/ui-state');
+    purgeCache('paco/file-handler-detect');
+    const task = require('../worker/tasks/viewer-details');
+    const { ctx, promise } = makeCtx({ path: target });
+    task.start(ctx);
+    const { ok, result } = await promise;
+    assert.ok(ok, result && result.error);
+    assert.equal(result.mime, 'application/xml', 'confirms this is the exact case that used to flip isTextual to false');
+    assert.equal(result.isTextual, true);
   });
 
   test('kindLabel, mime, and isTextual are all null for a folder (no Type row in that case)', async () => {

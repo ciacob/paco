@@ -101,6 +101,41 @@ describe('detectIsTextual', () => {
     const result = await detect.detectIsTextual(path.join(tmpDir, 'ghost2.txt'));
     assert.equal(result, false);
   });
+
+  // Regression coverage for the SVG inconsistency this whole mechanism was
+  // changed to fix — see file-handler-detect.js's own comment on why
+  // isTextual no longer depends on detectMime() at all. These two variants
+  // are the exact shape that used to disagree: one gets a real MIME match
+  // from file-type (an <?xml ...?> prolog), one doesn't (bare <svg ...>,
+  // valid, common, especially from icon libraries) — but detectIsTextual()
+  // alone, which is now the sole authority, correctly says true for BOTH,
+  // regardless of what detectMime() separately reports.
+  test('SVG WITH an XML prolog — content-sniff alone still says textual, even though detectMime() finds application/xml', async () => {
+    const p = path.join(tmpDir, 'with-prolog.svg');
+    await fsp.writeFile(p, '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>\n');
+    assert.equal(await detect.detectIsTextual(p), true);
+    assert.equal(await detect.detectMime(p), 'application/xml'); // confirms this is the exact case that used to flip isTextual to false
+  });
+
+  test('SVG WITHOUT an XML prolog — content-sniff says textual; detectMime() finds nothing at all for this shape', async () => {
+    const p = path.join(tmpDir, 'no-prolog.svg');
+    await fsp.writeFile(p, '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>\n');
+    assert.equal(await detect.detectIsTextual(p), true);
+    assert.equal(await detect.detectMime(p), null);
+  });
+
+  // Regression coverage for the OTHER direction — confirming trusting the
+  // content-sniff alone doesn't come at the cost of misclassifying real
+  // binary formats. A genuine PNG signature followed by (effectively
+  // random, definitely non-printable) binary bytes should still be
+  // correctly identified as non-textual with no help from detectMime().
+  test('a real PNG signature plus binary payload → still correctly non-textual via content alone', async () => {
+    const p = path.join(tmpDir, 'real-shape.png');
+    const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const ihdrLengthAndType = Buffer.from([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]); // length=13, "IHDR" — the null bytes in the length field are the point
+    await fsp.writeFile(p, Buffer.concat([pngSignature, ihdrLengthAndType]));
+    assert.equal(await detect.detectIsTextual(p), false);
+  });
 });
 
 // ─── detectIsExecutable ───────────────────────────────────────────────────────

@@ -24,11 +24,18 @@ const path = require('path');
  * last CommonJS-compatible release — see package.json for why this is
  * pinned exactly rather than left on a caret range).
  *
- * file-type is binary-signature-only: it returns undefined for text-based
- * formats by design (there is no fixed byte signature for "this is text"),
- * not as a bug or a gap we're working around — see detectIsTextual() below
- * for how that case is actually told apart from "this is some other binary
- * we don't recognise".
+ * No longer has any say in text-vs-binary (see detectIsTextual() below,
+ * which is the sole authority on that now) — this exists purely to
+ * classify what KIND of binary something is, once it's already been
+ * determined to be one. It used to double as the text-vs-binary signal
+ * too (mime found → assume binary), but that assumption broke for MIME
+ * types that are themselves textual — confirmed concretely with SVG:
+ * file-type only recognises it via an <?xml ...?> prolog, which valid,
+ * common SVG (especially hand-authored/icon-library files) routinely
+ * omits, so file-type's opinion on the SAME format flipped depending on
+ * a detail invisible in the rendered result. Decoupling this from
+ * isTextual entirely closes that whole class of inconsistency, not just
+ * the one SVG instance of it.
  *
  * @param {string} filePath
  * @returns {Promise<string|null>} MIME type string, or null if no match
@@ -67,9 +74,27 @@ const ALLOWED_CONTROL_CODES = new Set([
 ]);
 
 /**
- * Sniff whether a file's leading bytes look like text or binary content.
- * Only meaningful — and only ever consulted — when detectMime() has already
- * returned null (file-type found no recognised binary signature).
+ * Sniff whether a file's leading bytes look like text or binary content —
+ * the SOLE authority on text-vs-binary now (see detectMime()'s own comment
+ * for why that used to also have a say, and why that stopped being
+ * reliable). Always run, never conditionally skipped based on what
+ * detectMime() finds.
+ *
+ * Deliberately trusted over MIME sniffing for this specific decision:
+ * genuinely binary content (compressed data, image/audio payloads, etc.)
+ * has a vanishingly small chance of containing zero NUL bytes across an
+ * 8KB sample — for effectively-random binary bytes, something on the
+ * order of 10^-14 — confirmed empirically against real JPEG, PNG, ZIP,
+ * and DOCX files during this change, all correctly identified as binary
+ * by this check alone, with no help from MIME detection at all. Where
+ * this heuristic COULD in principle be wrong (a very small file, or an
+ * unusually long text preamble before any binary payload begins within
+ * the sample window) the failure mode is mild — content displays as
+ * garbled text rather than a hex dump, not a safety issue, since the
+ * generic-text renderer's own escaping is already proven safe for
+ * arbitrary bytes including NULs — whereas the OLD failure mode (a
+ * MIME match forcing isTextual:false for something that was actually
+ * text) was a genuine loss of functionality, not just a cosmetic one.
  *
  * @param {string} filePath
  * @returns {Promise<boolean>} true if the sampled content looks textual
