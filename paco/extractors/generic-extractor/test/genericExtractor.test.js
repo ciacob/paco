@@ -698,6 +698,20 @@ test('getGenericPreview: disabled prev/next buttons force color:inherit (overrid
   assert.match(result.html, /#ge-find-toolbar button:disabled\{color:inherit;opacity:0\.7;\}/);
 });
 
+test('getGenericPreview: .ge-match/.ge-match-current/.ge-mirror derive from the sampled selection colors via CSS variables, each with its own historical color as fallback', () => {
+  const result = getGenericPreview(Buffer.from('hello world'), true);
+  assert.match(result.html, /\.ge-match\{background:var\(--paco-selection-bg,#ffe58f\);color:var\(--paco-selection-color,#000\);filter:invert\(1\);\}/);
+  assert.match(result.html, /\.ge-match-current\{filter:invert\(1\) hue-rotate\(10deg\) saturate\(10\);\}/);
+  assert.match(result.html, /\.ge-mirror\{background:var\(--paco-selection-bg,#91caff\);color:var\(--paco-selection-color,#000\);filter:hue-rotate\(90deg\) saturate\(1\.3\) brightness\(0\.9\);\}/);
+});
+
+test('getGenericPreview: .ge-match-current does not repeat background/color — it always carries .ge-match too, inheriting those for free', () => {
+  const result = getGenericPreview(Buffer.from('hello world'), true);
+  const rule = result.html.match(/\.ge-match-current\{[^}]*\}/)[0];
+  assert.doesNotMatch(rule, /background:/);
+  assert.doesNotMatch(rule, /color:/);
+});
+
 test('getGenericPreview: Find toolbar is fixed-positioned with a translucent, blurred background, and the content row has an id for the client script to pad', () => {
   const result = getGenericPreview(Buffer.from('hello world'), true);
   const dom = new JSDOM(`<div id="root">${result.html}</div>`);
@@ -719,6 +733,23 @@ test('getGenericPreview: Find toolbar is fixed-positioned with a translucent, bl
 function domWithScriptRun(html) {
   const dom = new JSDOM(`<!doctype html><html><body><div id="root">${html}</div></body></html>`, {
     runScripts: 'dangerously',
+    pretendToBeVisual: true,
+    // jsdom doesn't implement ResizeObserver at all (confirmed: undefined
+    // even with pretendToBeVisual) — this minimal polyfill, injected
+    // before the document's own <script> parses/runs, mimics the one
+    // behavior genericExtractor.js's own code actually depends on: a real
+    // ResizeObserver fires its callback once immediately upon observe(),
+    // with whatever size the target currently has (jsdom's offsetHeight
+    // is always 0, so that's what the "size" ends up being here — same
+    // limitation as everywhere else in this file that touches layout).
+    beforeParse(window) {
+      window.ResizeObserver = class {
+        constructor(callback) { this._callback = callback; }
+        observe(el) { this._callback([{ target: el }]); }
+        unobserve() {}
+        disconnect() {}
+      };
+    },
   });
   return dom;
 }
@@ -767,6 +798,38 @@ test('Find UI: a case-insensitive query containing regex-special characters matc
   input.value = '$5.00'; // caseInsensitive stays checked (default) — routes through the regex path
   pressEnter(input);
   assert.equal(doc.getElementById('ge-match-count').textContent, '1 / 1', 'exactly one literal match, not corrupted by unescaped regex metacharacters');
+});
+
+test('Find UI: a matched span genuinely computes filter:invert(1) — confirmed via getComputedStyle on the real generated markup', () => {
+  const result = getGenericPreview(Buffer.from('cat dog cat'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  input.value = 'cat';
+  pressEnter(input);
+  // Excludes the current match — it carries BOTH .ge-match and
+  // .ge-match-current at once, so its filter is the overridden one, not
+  // plain invert(1). Covered separately below.
+  const nonCurrentMatches = [...doc.querySelectorAll('.ge-match')].filter(el => !el.classList.contains('ge-match-current'));
+  assert.equal(nonCurrentMatches.length, 1);
+  assert.equal(dom.window.getComputedStyle(nonCurrentMatches[0]).filter, 'invert(1)');
+});
+
+test('Find UI: the CURRENT match gets a distinct filter from other matches — hue-rotated and saturated on top of the same inversion', () => {
+  const result = getGenericPreview(Buffer.from('cat dog cat'), true);
+  const dom = domWithScriptRun(result.html);
+  const doc = dom.window.document;
+  const input = doc.getElementById('ge-find-input');
+  input.value = 'cat';
+  pressEnter(input);
+  const current = doc.querySelector('.ge-match-current');
+  const others = [...doc.querySelectorAll('.ge-match')].filter(el => el !== current);
+  assert.equal(others.length, 1, 'exactly one non-current match remains');
+  const currentFilter = dom.window.getComputedStyle(current).filter;
+  const otherFilter = dom.window.getComputedStyle(others[0]).filter;
+  assert.equal(currentFilter, 'invert(1) hue-rotate(10deg) saturate(10)');
+  assert.equal(otherFilter, 'invert(1)');
+  assert.notEqual(currentFilter, otherFilter);
 });
 
 test('Find UI: a query with multiple matches enables next but not prev (starts on the first match)', () => {
@@ -872,7 +935,12 @@ test('Find UI: the content row gets a non-empty paddingTop from the toolbar\'s m
   // toolbar's actual content — this can't verify the PIXEL VALUE is
   // correct in a real browser, only that the mechanism runs without
   // error and actually sets contentEl.style.paddingTop (rather than, say,
-  // silently failing to find either element).
+  // silently failing to find either element). Measured via ResizeObserver
+  // now (see its own comment in genericExtractor.js for why — confirmed
+  // empirically that a synchronous read can return 0 when two of these
+  // iframes load together), polyfilled here since jsdom doesn't implement
+  // it — the polyfill fires synchronously on observe(), so no waiting
+  // needed in this test either way.
   const result = getGenericPreview(Buffer.from('hello world'), true);
   const dom = domWithScriptRun(result.html);
   const doc = dom.window.document;

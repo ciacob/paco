@@ -1652,7 +1652,17 @@ describe('composeIframeDocument', () => {
 
   test('with a selectionStyle, emits a ::selection rule with the given background-color/color', () => {
     const doc = S.composeIframeDocument('<p>x</p>', null, { backgroundColor: 'rgb(42, 58, 92)', color: 'rgb(201, 205, 212)' });
-    assert.match(doc, /<style>::selection\{background-color:rgb\(42, 58, 92\);color:rgb\(201, 205, 212\);\}<\/style>/);
+    assert.match(doc, /<style>::selection\{background-color:rgb\(42, 58, 92\);color:rgb\(201, 205, 212\);\}/);
+  });
+
+  test('with a selectionStyle, also publishes the same colors as --paco-selection-bg/--paco-selection-color custom properties on :root', () => {
+    const doc = S.composeIframeDocument('<p>x</p>', null, { backgroundColor: 'rgb(42, 58, 92)', color: 'rgb(201, 205, 212)' });
+    assert.match(doc, /:root\{--paco-selection-bg:rgb\(42, 58, 92\);--paco-selection-color:rgb\(201, 205, 212\);\}/);
+  });
+
+  test('without a selectionStyle, no --paco-selection-* custom properties are published either', () => {
+    const doc = S.composeIframeDocument('<p>x</p>');
+    assert.doesNotMatch(doc, /--paco-selection/);
   });
 
   test('without a selectionStyle, no ::selection rule is emitted', () => {

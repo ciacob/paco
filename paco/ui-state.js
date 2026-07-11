@@ -1196,6 +1196,16 @@ function siblingMediaRendererName(name) {
  * omission if incomplete — native selection just uses the browser
  * default in that case, same as before this existed.
  *
+ * The same two values are ALSO published as CSS custom properties on
+ * :root — --paco-selection-bg / --paco-selection-color — alongside the
+ * ::selection rule, under the same presence condition. This module stays
+ * extractor-agnostic (it has no idea generic-extractor's Find UI exists,
+ * and shouldn't need to), but an extractor that wants its own
+ * theme-consistent highlight colors — search-match highlighting being
+ * the motivating case — can reference var(--paco-selection-bg, fallback)
+ * itself, with its own historical hardcoded color as the fallback, so it
+ * degrades cleanly on the rare occasion sampling comes back incomplete.
+ *
  * Always emits one base rule regardless of textStyle: `html,body{height:
  * 100%;margin:0;}`. Without it, an extractor's own height:100% (e.g.
  * image-extractor's flex-centering wrapper around its thumbnail) has
@@ -1220,7 +1230,8 @@ function composeIframeDocument(bodyHtml, textStyle, selectionStyle) {
     ? `<style>body{color:${textStyle.color};font-family:${textStyle.fontFamily};font-size:${textStyle.fontSize};}</style>`
     : '';
   const selectionStyleRule = (selectionStyle && selectionStyle.backgroundColor && selectionStyle.color)
-    ? `<style>::selection{background-color:${selectionStyle.backgroundColor};color:${selectionStyle.color};}</style>`
+    ? `<style>::selection{background-color:${selectionStyle.backgroundColor};color:${selectionStyle.color};}` +
+      `:root{--paco-selection-bg:${selectionStyle.backgroundColor};--paco-selection-color:${selectionStyle.color};}</style>`
     : '';
   return (
     '<!DOCTYPE html><html><head><meta charset="utf-8">' +

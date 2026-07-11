@@ -620,9 +620,32 @@ if (prevBtn) prevBtn.addEventListener('click', function(){ stepMatch(-1); });
 // have been in flow, i.e. hidden behind it. Measured rather than a
 // guessed constant, since the toolbar's real height depends on the
 // font-size the theme happens to inject.
+//
+// Measured via ResizeObserver, not a synchronous read or a one-shot
+// requestAnimationFrame wait — confirmed empirically (a real trace from
+// a real session) that a synchronous read, during this script's own
+// parse-time execution, can return 0 specifically when two of these
+// iframes are being created together in the same synchronous pass
+// (PACO's own renderViewer() rebuilds both panel columns at once): the
+// outer page hadn't yet committed a layout pass giving THIS iframe
+// element its real, non-zero size at the exact moment its own inline
+// script ran. That's a cross-document timing concern — has the OUTER
+// page sized this iframe box yet — that a one-shot animation-frame wait
+// only heuristically stands in for, rather than being directly tied to.
+// ResizeObserver fires precisely when the toolbar's actual size becomes
+// known, whatever that timing turns out to be, and — left running
+// rather than disconnected after the first fire — keeps the padding
+// correct if that size ever changes later too (e.g. the toolbar
+// wrapping onto two lines at a narrow width, something a one-shot
+// measurement would never catch).
 var toolbar = document.getElementById(P+'-find-toolbar');
 var contentEl = document.getElementById(P+'-content');
-if (toolbar && contentEl) contentEl.style.paddingTop = toolbar.offsetHeight + 'px';
+if (toolbar && contentEl && window.ResizeObserver) {
+  var findToolbarResizeObserver = new ResizeObserver(function(){
+    contentEl.style.paddingTop = toolbar.offsetHeight + 'px';
+  });
+  findToolbarResizeObserver.observe(toolbar);
+}
 
 if (mode === 'binary' && layout) {
   function charOffsetToByteCoordinate(offset){
@@ -758,7 +781,45 @@ function assembleHtml({ mode, bodyText, gutterText, config, layout }) {
   const script = config.interactive ? buildClientScript(mode, layout, P) : '';
   return (
     `${findToolbar}<div id="${P}-content" style="display:flex;">${gutterHtml}${bodyHtml}</div>` +
-    `<style>.${P}-match{background:#ffe58f;}.${P}-match-current{background:#ffa940;}.${P}-mirror{background:#91caff;}` +
+    // .ge-match/.ge-match-current (Find UI matches) and .ge-mirror (binary
+    // mode's hex/Latin-1 cross-highlight) all derive from the same
+    // --paco-selection-bg/--paco-selection-color custom properties
+    // composeIframeDocument publishes (see its own comment for why they
+    // exist) — deliberately NOT the raw selection colors themselves,
+    // which would be indistinguishable from an actual text selection
+    // sitting on top of one of these spans. filter:invert(1) guarantees
+    // visual difference from the selection by construction (a color and
+    // its inverse are never equal, short of a perfect mid-gray) while
+    // preserving whatever contrast magnitude the sampled pair already
+    // has — inverting both endpoints of a light-text/dark-background (or
+    // vice versa) pair together keeps the SAME relative contrast, just
+    // flipped, so it stays readable regardless of which theme it came
+    // from. .ge-match-current only overrides filter, not background/
+    // color — its span always carries BOTH classes at once (see
+    // matchCurrentClass in buildClientScript below), so it inherits
+    // those from .ge-match for free. hue-rotate(10deg) saturate(10) on
+    // top of the same inversion — confirmed empirically across both
+    // themes — lands on a close, clearly-still-related shade to
+    // .ge-match rather than a strongly contrasting one (an earlier
+    // hue-rotate(180deg) swung too far into an unrelated color entirely);
+    // the heavy saturate boost is what actually keeps that close shade
+    // visually distinct rather than reading as the same color. .ge-mirror
+    // deliberately skips invert entirely — a plain hue-rotate keeps it
+    // visually distinct from BOTH match variants as a genuinely
+    // different family (never inverted), appropriate since it can be
+    // visible at the same time as a Find match and needs to read as a
+    // different KIND of highlight, not just a different shade of the
+    // same one. brightness(0.9) on top — also confirmed empirically
+    // across both themes — makes it read more visibly as a highlight
+    // rather than blending too close to its own surroundings. Each
+    // rule's own historical hardcoded color is kept as the var()
+    // fallback, so this degrades to exactly the original, already-working
+    // look on the rare occasion selection sampling comes back incomplete
+    // (see composeIframeDocument's own null-selectionStyle handling).
+    `<style>` +
+    `.${P}-match{background:var(--paco-selection-bg,#ffe58f);color:var(--paco-selection-color,#000);filter:invert(1);}` +
+    `.${P}-match-current{filter:invert(1) hue-rotate(10deg) saturate(10);}` +
+    `.${P}-mirror{background:var(--paco-selection-bg,#91caff);color:var(--paco-selection-color,#000);filter:hue-rotate(90deg) saturate(1.3) brightness(0.9);}` +
     // Scoped to the toolbar specifically (not a bare button:disabled) —
     // this file's only buttons happen to live there today, but scoping
     // avoids silently reaching into anything else that might share this
